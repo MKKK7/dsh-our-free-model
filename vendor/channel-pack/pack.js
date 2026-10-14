@@ -38785,7 +38785,11 @@ var TRAE_INTL = {
   pluginVersion: "2.3.68993",
   defaultCredentialRef: "TRAE_INTL_ACCESS_TOKEN",
   userAgent: "Trae/3.5.87 (stable_i18n; sg)",
-  fallbackModels: TRAE_INTL_FALLBACK_MODELS
+  fallbackModels: TRAE_INTL_FALLBACK_MODELS,
+  // TRAE 国际版实测 (`main.log:218`, `main.log:87/234`) 走 PKCE 流程 +
+  // 新协议 DeviceProof；CN TRAE 不需要。
+  pkceEnabled: true,
+  deviceKeyRequired: true
 };
 function traeProductById(id) {
   switch (id) {
@@ -38966,7 +38970,7 @@ function parseTraeUserInfoResponse(data) {
     email: readStringField3(r, "NonPlainTextEmail") || readStringField3(r, "nonPlainTextEmail")
   };
 }
-function buildTraeCredential(exchange, userInfo, session, nowMs = Date.now()) {
+function buildTraeCredential(exchange, userInfo, session, nowMs = Date.now(), deviceKeyPair = void 0, codeVerifier = "") {
   let expiresAt;
   if (exchange.tokenExpireAt > 1e12) {
     expiresAt = String(exchange.tokenExpireAt);
@@ -38988,7 +38992,9 @@ function buildTraeCredential(exchange, userInfo, session, nowMs = Date.now()) {
     ...userInfo.email.length > 0 ? { email: userInfo.email } : {},
     machine_id: session.machineId,
     device_id: session.deviceId,
-    enterprise_id: userInfo.enterpriseId
+    enterprise_id: userInfo.enterpriseId,
+    ...deviceKeyPair ? { device_key_pair: deviceKeyPair } : {},
+    ...codeVerifier.length > 0 ? { code_verifier: codeVerifier } : {}
   };
 }
 function traeDisplayNickname(credential, fallbackId) {
@@ -39240,6 +39246,74 @@ function generateDeviceId() {
   const buf = new Uint8Array(16);
   crypto.getRandomValues(buf);
   return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function generateTraeDeviceKeyPair() {
+  const subtle = globalThis.crypto.subtle;
+  if (!subtle) throw new Error("\u5F53\u524D\u73AF\u5883\u7F3A\u5C11 crypto.subtle\uFF0C\u65E0\u6CD5\u751F\u6210 ECDSA \u5BC6\u94A5\u5BF9");
+  const pair = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const [spkiDer, pkcs8Der] = await Promise.all([
+    subtle.exportKey("spki", pair.publicKey),
+    subtle.exportKey("pkcs8", pair.privateKey)
+  ]);
+  return {
+    public_key: pemWrap("PUBLIC KEY", new Uint8Array(spkiDer)),
+    private_key: pemWrap("PRIVATE KEY", new Uint8Array(pkcs8Der))
+  };
+}
+function pemWrap(label, der) {
+  const b64 = typeof Buffer !== "undefined" ? Buffer.from(der).toString("base64") : btoa(String.fromCharCode(...der));
+  const lines = b64.match(/.{1,64}/g) ?? [b64];
+  return `-----BEGIN ${label}-----
+${lines.join("\n")}
+-----END ${label}-----
+`;
+}
+async function signTraeDeviceProof(privateKeyPem, message2) {
+  const subtle = globalThis.crypto.subtle;
+  if (!subtle) throw new Error("\u5F53\u524D\u73AF\u5883\u7F3A\u5C11 crypto.subtle\uFF0C\u65E0\u6CD5\u7B7E\u540D DeviceProof");
+  const der = pemUnwrap(privateKeyPem, "PRIVATE KEY");
+  const key = await subtle.importKey(
+    "pkcs8",
+    der,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"]
+  );
+  return await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(message2));
+}
+function buildTraeDeviceProofMessage(args) {
+  return ["POST", args.path, args.clientId, args.refreshToken, String(args.timestamp), args.nonce].join("\n");
+}
+function generateTraeNonce() {
+  const buf = new Uint8Array(16);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+function pemUnwrap(pem, label) {
+  const begin = `-----BEGIN ${label}-----`;
+  const end = `-----END ${label}-----`;
+  const start = pem.indexOf(begin);
+  const stop = pem.indexOf(end);
+  if (start < 0 || stop < 0) throw new Error(`PEM \u7F3A ${begin}/${end} \u6807\u8BB0`);
+  const b64 = pem.slice(start + begin.length, stop).replace(/\s+/g, "");
+  if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(b64, "base64"));
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function generateTraeCodeVerifier() {
+  const buf = new Uint8Array(32);
+  crypto.getRandomValues(buf);
+  let b64 = typeof Buffer !== "undefined" ? Buffer.from(buf).toString("base64") : btoa(String.fromCharCode(...buf));
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function buildTraeCodeChallenge(verifier) {
+  const subtle = globalThis.crypto.subtle;
+  if (!subtle) throw new Error("\u5F53\u524D\u73AF\u5883\u7F3A\u5C11 crypto.subtle\uFF0C\u65E0\u6CD5\u6D3E\u751F PKCE challenge");
+  const hash = await subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  let b64 = typeof Buffer !== "undefined" ? Buffer.from(hash).toString("base64") : btoa(String.fromCharCode(...new Uint8Array(hash)));
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 function deriveRotatingMachineId(baseMachineId, generation) {
   if (!Number.isFinite(generation) || generation <= 0) return baseMachineId;
@@ -45041,10 +45115,12 @@ function machineTraceId(machineId, deviceId) {
   const joined = machineId + deviceId;
   return joined.length >= 16 ? joined.slice(-16) : joined.padStart(16, "0");
 }
-function buildTraeLoginURL(product, machineId, deviceId, callbackUrl) {
+function buildTraeLoginURL(product, machineId, deviceId, callbackUrl, codeChallenge = "") {
+  const isIntl = product.pkceEnabled === true;
   const params = new URLSearchParams({
     login_version: "1",
-    auth_from: "solo",
+    // TRAE 国际版实测是 `auth_from=trae`（`main.log:218`）；CN 是 `solo`。
+    auth_from: isIntl ? "trae" : "solo",
     login_channel: "native_ide",
     plugin_version: product.pluginVersion,
     auth_type: "local",
@@ -45057,12 +45133,19 @@ function buildTraeLoginURL(product, machineId, deviceId, callbackUrl) {
     device_id: deviceId,
     x_device_id: deviceId,
     x_machine_id: machineId,
-    x_device_brand: "PC",
-    x_device_type: "PC",
-    x_os_version: "1.0",
+    // TRAE 国际版真身（`main.log:218`）x_device_brand 是**主板型号**（`90Q1006DCP`），
+    // 不是 CN 的字面量 `PC`。CN 保持原样以免破坏老账号。
+    x_device_brand: isIntl ? "90Q1006DCP" : "PC",
+    x_device_type: isIntl ? "windows" : "PC",
+    x_os_version: isIntl ? encodeURIComponent(product.osVersion) : "1.0",
     x_app_version: product.ideVersion,
-    x_app_type: "stable"
+    x_app_type: "stable",
+    channel_name: "common"
   });
+  if (codeChallenge.length > 0) {
+    params.set("code_challenge", codeChallenge);
+    params.set("code_challenge_method", "S256");
+  }
   return `${product.consoleHost}/authorization?${params.toString()}`;
 }
 function parseJsonParam(raw) {
@@ -45105,6 +45188,48 @@ function fixNicknameMojibake(raw, uid) {
   if (!/[\u4e00-\u9fff]/.test(raw)) return `\u7528\u6237${uid.slice(-4)}`;
   return raw;
 }
+function intlOsInfo(product) {
+  const v = product.osVersion.toLowerCase();
+  if (v.startsWith("mac") || v.includes("darwin")) return "macos";
+  if (v.startsWith("linux") || v.includes("ubuntu") || v.includes("debian")) return "linux";
+  return "windows";
+}
+function intlDeviceBrandModel(product) {
+  return { brand: product.deviceBrand, model: "PC" };
+}
+function intlDeviceName() {
+  try {
+    const os = __require("node:os");
+    return os.userInfo().username;
+  } catch {
+    return "user";
+  }
+}
+function buildIntlDeviceInfo(session, product, publicKeyPem) {
+  const { brand, model } = intlDeviceBrandModel(product);
+  let cpu = "unknown";
+  try {
+    const os = __require("node:os");
+    cpu = os.cpus()[0]?.model ?? "unknown";
+  } catch {
+  }
+  const slice = session.deviceId.replace(/[^0-9a-f]/gi, "").slice(0, 16).padEnd(16, "0");
+  const deviceIdInt = (BigInt("0x" + slice) % (9999999999999999999n - 1000000000000000000n) + 1000000000000000000n).toString();
+  return {
+    DeviceID: deviceIdInt,
+    MachineID: session.machineId,
+    PlatformCode: "IDE_PC",
+    DeviceType: "PC",
+    DeviceName: intlDeviceName(),
+    DeviceModel: model,
+    ClientVersion: product.ideVersion,
+    DevicePublicKey: publicKeyPem,
+    DeviceBrand: brand,
+    DeviceCPU: cpu,
+    OSInfo: intlOsInfo(product),
+    OSVersion: product.osVersion
+  };
+}
 function parseTraeCallbackDetailed(rawUrl) {
   let query;
   try {
@@ -45143,11 +45268,7 @@ function parseTraeCallbackDetailed(rawUrl) {
   if (authCode.length > 0) info.authCode = authCode;
   if (info.refreshToken.length === 0 && info.accessToken.length === 0) {
     if (authCode.length > 0) {
-      return {
-        ok: false,
-        authCodeFlow: true,
-        reason: "\u4E0A\u6E38\u8FD4\u56DE\u4E86 PKCE \u6388\u6743\u7801\uFF08code/authCodeInfo\uFF09\uFF0C\u672C\u5B9E\u73B0\u6682\u4E0D\u652F\u6301\u8BE5\u6D41\u7A0B\uFF1B\u8BF7\u786E\u8BA4 TRAE \u6388\u6743\u9875\u662F\u5426\u5DF2\u5207\u6362\u5230\u65B0\u6D41\u7A0B"
-      };
+      return { ok: true, info, authCodeFlow: true };
     }
     return {
       ok: false,
@@ -45157,15 +45278,55 @@ function parseTraeCallbackDetailed(rawUrl) {
   }
   return { ok: true, info };
 }
-async function exchangeTraeCallback(callback, session, product, fetcher = fetch, nowMs = Date.now()) {
+async function exchangeTraeCallback(callback, session, product, fetcher = fetch, nowMs = Date.now(), existingKeyPair = null, codeVerifier = "") {
   let exchange;
-  if (callback.refreshToken.length > 0) {
-    const exchangeBody = {
-      ClientID: product.clientId,
-      RefreshToken: callback.refreshToken,
-      ClientSecret: "-",
-      UserID: ""
-    };
+  let generatedKeyPair;
+  if (callback.refreshToken.length > 0 || callback.authCode) {
+    const isIntl = product.pkceEnabled === true;
+    const isDeviceKey = product.deviceKeyRequired === true;
+    let exchangeBody;
+    if (isIntl && callback.authCode) {
+      const keyPair = existingKeyPair ?? await generateTraeDeviceKeyPair();
+      if (!existingKeyPair) generatedKeyPair = keyPair;
+      const deviceInfo = buildIntlDeviceInfo(session, product, keyPair.public_key);
+      exchangeBody = {
+        ClientID: product.clientId,
+        AuthCode: callback.authCode,
+        CodeVerifier: codeVerifier,
+        DeviceInfo: deviceInfo,
+        IDEVersion: product.ideVersion
+      };
+    } else if (isDeviceKey) {
+      const keyPair = existingKeyPair ?? await generateTraeDeviceKeyPair();
+      if (!existingKeyPair) generatedKeyPair = keyPair;
+      const deviceInfo = buildIntlDeviceInfo(session, product, keyPair.public_key);
+      const timestamp = Math.floor(nowMs / 1e3);
+      const nonce = generateTraeNonce();
+      const message2 = buildTraeDeviceProofMessage({
+        path: traeExchangePathFor(product),
+        clientId: product.clientId,
+        refreshToken: callback.refreshToken,
+        timestamp,
+        nonce
+      });
+      const signatureBuf = await signTraeDeviceProof(keyPair.private_key, message2);
+      const signature = typeof Buffer !== "undefined" ? Buffer.from(signatureBuf).toString("base64") : btoa(String.fromCharCode(...new Uint8Array(signatureBuf)));
+      exchangeBody = {
+        ClientID: product.clientId,
+        ClientSecret: "",
+        RefreshToken: callback.refreshToken,
+        DeviceInfo: deviceInfo,
+        DeviceProof: { Signature: signature, Timestamp: timestamp, Nonce: nonce },
+        IDEVersion: product.ideVersion
+      };
+    } else {
+      exchangeBody = {
+        ClientID: product.clientId,
+        RefreshToken: callback.refreshToken,
+        ClientSecret: "-",
+        UserID: ""
+      };
+    }
     const exchangeResp = await fetcher(`${product.oauthHost}${traeExchangePathFor(product)}`, {
       method: "POST",
       headers: traeOAuthHeaders(product),
@@ -45228,7 +45389,14 @@ async function exchangeTraeCallback(callback, session, product, fetcher = fetch,
   if (exchange.accessToken.length === 0) {
     throw new Error("TRAE \u6362 token \u540E\u6CA1\u6709 accessToken");
   }
-  return buildTraeCredential(exchange, userInfo, session, nowMs);
+  return buildTraeCredential(
+    exchange,
+    userInfo,
+    session,
+    nowMs,
+    generatedKeyPair ? { public_key: generatedKeyPair.public_key, private_key: generatedKeyPair.private_key } : void 0,
+    codeVerifier
+  );
 }
 function listenOrReject(server, port, onError) {
   return new Promise((resolve2, reject) => {
@@ -45265,14 +45433,24 @@ async function runTraeLoginFlow(options) {
   const machineId = generateMachineId();
   const deviceId = generateDeviceId();
   const preferredPort = options.callbackPort ?? TRAE_CALLBACK_PORT;
-  const { callback, port } = await startCallbackServer2(preferredPort, options.product.consoleHost);
+  const isPkce = options.product.pkceEnabled === true;
+  const codeVerifier = isPkce ? generateTraeCodeVerifier() : "";
+  const codeChallenge = isPkce ? await buildTraeCodeChallenge(codeVerifier) : "";
+  const { callback, port } = await startCallbackServer2(
+    preferredPort,
+    options.product.consoleHost,
+    TRAE_LOGIN_TIMEOUT_MS,
+    codeVerifier
+  );
   const callbackUrl = `http://127.0.0.1:${port}/authorize`;
-  const loginUrl = buildTraeLoginURL(options.product, machineId, deviceId, callbackUrl);
+  const loginUrl = buildTraeLoginURL(options.product, machineId, deviceId, callbackUrl, codeChallenge);
   const credential = await exchangeTraeCallback(
     callback,
     { machineId, deviceId },
     options.product,
-    options.fetcher
+    options.fetcher,
+    void 0,
+    codeVerifier
   );
   const access = JSON.stringify(credential);
   const expires = credentialExpiresAtMs(credential) ?? 0;
@@ -45287,6 +45465,9 @@ async function startTraeLoginFlow(options) {
   const machineId = generateMachineId();
   const deviceId = generateDeviceId();
   const preferredPort = options.callbackPort ?? TRAE_CALLBACK_PORT;
+  const isPkce = options.product.pkceEnabled === true;
+  const codeVerifier = isPkce ? generateTraeCodeVerifier() : "";
+  const codeChallenge = isPkce ? await buildTraeCodeChallenge(codeVerifier) : "";
   const server = createServer3();
   let resultTimer;
   let rejectResult;
@@ -45315,7 +45496,7 @@ async function startTraeLoginFlow(options) {
         return;
       }
       const callback = parsed.info;
-      exchangeTraeCallback(callback, { machineId, deviceId }, options.product, options.fetcher).then((credential) => {
+      exchangeTraeCallback(callback, { machineId, deviceId }, options.product, options.fetcher, void 0, codeVerifier).then((credential) => {
         if (resultTimer) clearTimeout(resultTimer);
         const access = JSON.stringify(credential);
         const expires = credentialExpiresAtMs(credential) ?? 0;
@@ -45349,7 +45530,7 @@ async function startTraeLoginFlow(options) {
     throw new Error(message2);
   }
   const callbackUrl = `http://127.0.0.1:${actualPort}/authorize`;
-  loginUrl = buildTraeLoginURL(options.product, machineId, deviceId, callbackUrl);
+  loginUrl = buildTraeLoginURL(options.product, machineId, deviceId, callbackUrl, codeChallenge);
   return {
     loginUrl,
     result: resultPromise,
@@ -45362,7 +45543,7 @@ async function startTraeLoginFlow(options) {
     })
   };
 }
-async function startCallbackServer2(port = TRAE_CALLBACK_PORT, _consoleHost, timeoutMs = TRAE_LOGIN_TIMEOUT_MS) {
+async function startCallbackServer2(port = TRAE_CALLBACK_PORT, _consoleHost, timeoutMs = TRAE_LOGIN_TIMEOUT_MS, codeVerifier = "") {
   const server = createServer3();
   let timer;
   let actualPort = port;
@@ -45386,7 +45567,7 @@ async function startCallbackServer2(port = TRAE_CALLBACK_PORT, _consoleHost, tim
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
       res.end("\u5DF2\u6536\u5230 TRAE \u6388\u6743\uFF0C\u6B63\u5728\u6362\u53D6\u51ED\u636E\u2026\u53EF\u4EE5\u5173\u95ED\u6B64\u9875\u9762\u3002");
       server.close();
-      resolve2({ callback: parsed.info, port: actualPort });
+      resolve2({ callback: { ...parsed.info, codeVerifier }, port: actualPort });
     });
     timer = setTimeout(() => {
       server.close();

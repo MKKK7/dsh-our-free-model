@@ -152,6 +152,33 @@ export interface TraeCredential {
   api_host?: string
   /** 企业 ID。 */
   enterprise_id?: string
+  /**
+   * 设备 ECDSA P-256 密钥对（PEM 字符串对），TRAE **国际版**强制要求。
+   *
+   * 持久化原因：TRAE 国际版 ExchangeToken 的 `DeviceProof.Signature`
+   * 必须用与 `DevicePublicKey` 对应的私钥签发；若每次新生成密钥对，
+   * 公共钥变了会把已绑定的 session 作废。**所以首登后必须回写并复签**。
+   *
+   * 字段格式与真身对齐（`main.log:87` 实测 TRAE 国际版 `DeviceInfo`）：
+   * - `publicKey` = `-----BEGIN PUBLIC KEY-----\n<SPKI base64>\n-----END PUBLIC KEY-----\n`
+   * - `privateKey` = `-----BEGIN PRIVATE KEY-----\n<PKCS#8 base64>\n-----END PRIVATE KEY-----\n`
+   *
+   * 可选：CN 账号不存也兼容 —— 走老协议 `{ClientID, ClientSecret:"-", RefreshToken, UserID}`
+   * 不需要 DeviceProof。
+   */
+  device_key_pair?: { public_key: string; private_key: string }
+  /**
+   * PKCE `code_verifier`（TRAE 国际版 OAuthMarscodeService 用）。
+   *
+   * 走 `exchangeTokenByAuthCode` 流程时，DSH 登录页用 `code_verifier`
+   * SHA-256 后取 base64url 生成 `code_challenge` 附在 login URL；
+   * 回调拿到 `authCodeInfo.AuthCode` 后，把 `code_verifier` 一起 POST
+   * 给 ExchangeToken 换 access_token。**verifier 与 challenge 必须配对**，
+   * 所以也要持久化（防止 refresh 时 verifier 丢了再被服务端校验失败）。
+   *
+   * 同样可选；CN 协议不走 PKCE。
+   */
+  code_verifier?: string
 }
 
 // ── 过期时间与可刷新判定 ──
@@ -506,6 +533,16 @@ export function buildTraeCredential(
   userInfo: TraeUserInfoResult,
   session: { machineId: string; deviceId: string },
   nowMs: number = Date.now(),
+  /**
+   * TRAE 国际版 DeviceKeyPair（PEM），**首登时**由 `exchangeTraeCallback` 传入
+   * 并**回填**到凭据。CN 账号传 `undefined` 即可。
+   */
+  deviceKeyPair: { public_key: string; private_key: string } | undefined = undefined,
+  /**
+   * TRAE 国际版 PKCE `code_verifier`（**首登时**也要回填，
+   * 后续 AuthCode 流程仍可能用得上）。
+   */
+  codeVerifier: string = '',
 ): TraeCredential {
   // Go 端 normalizeExpiresAt：毫秒→秒；我们存毫秒，所以要 *1000。
   let expiresAt: string
@@ -533,6 +570,8 @@ export function buildTraeCredential(
     machine_id: session.machineId,
     device_id: session.deviceId,
     enterprise_id: userInfo.enterpriseId,
+    ...deviceKeyPair ? { device_key_pair: deviceKeyPair } : {},
+    ...codeVerifier.length > 0 ? { code_verifier: codeVerifier } : {},
   }
 }
 
@@ -1318,6 +1357,197 @@ export function generateDeviceId(): string {
   const buf = new Uint8Array(16)
   crypto.getRandomValues(buf)
   return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+// ── TRAE 国际版 DeviceProof（ECDSA P-256 密钥对 + 签名） ──
+
+/** ECDSA P-256 密钥对（PEM 字符串），TRAE 国际版首次登录时生成。 */
+export interface TraeDeviceKeyPair {
+  /** SPKI PEM（`BEGIN PUBLIC KEY`）。 */
+  public_key: string
+  /** PKCS#8 PEM（`BEGIN PRIVATE KEY`）。 */
+  private_key: string
+}
+
+/**
+ * 生成 ECDSA P-256 密钥对（**仅 TRAE 国际版需要**）。
+ *
+ * 对齐 TRAE 国际版 `OAuthMarscodeService` 首次登录时
+ * "device key pair" 的产出格式（`main.log:86 "loaded device key pair from storage"`）。
+ *
+ * ## 算法选择
+ * - **曲线**：NIST P-256（`prime256v1` / `secp256r1`），TRAE 真身 DevicePublicKey
+ *   解码后 0x04 + 32 字节 x + 32 字节 y = 65 字节，正是 P-256 SPKI 裸格式。
+ * - **可导出**：PEM 是 WebCrypto 公私钥的标准序列化（`spki` / `pkcs8`），
+ *   TRAE 服务端应该接受这个格式。
+ * - **算法**：Node 18+ / Electron 22+ 全局有 `crypto.subtle`，
+ *   pack.js 经 esbuild 打包后仍可直接引用，**不需 polyfill**。
+ */
+export async function generateTraeDeviceKeyPair(): Promise<TraeDeviceKeyPair> {
+  const subtle = (globalThis.crypto as Crypto).subtle
+  if (!subtle) throw new Error('当前环境缺少 crypto.subtle，无法生成 ECDSA 密钥对')
+  // ECDH/ECDSA 走 P-256；exportable=true 才能导出私钥。
+  const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
+  const [spkiDer, pkcs8Der] = await Promise.all([
+    subtle.exportKey('spki', pair.publicKey),
+    subtle.exportKey('pkcs8', pair.privateKey),
+  ])
+  return {
+    public_key: pemWrap('PUBLIC KEY', new Uint8Array(spkiDer)),
+    private_key: pemWrap('PRIVATE KEY', new Uint8Array(pkcs8Der)),
+  }
+}
+
+/** DeviceInfo.DeviceID 范围 —— TRAE 真实给的是 19 位十进制 uint64。 */
+const DEVICE_ID_MIN = 1_000_000_000_000_000_000n // 1e18
+const DEVICE_ID_MAX = 9_999_999_999_999_999_999n // 1e19-1
+
+/**
+ * 生成 19 位十进制 `DeviceID`（TRAE 国际版 `DeviceInfo.DeviceID` 用）。
+ *
+ * 实测真身（`main.log:87`）是 `"7491185102779090449"`（19 位），
+ * 不是 `generateDeviceId()` 的 32 hex。TRAE 把它当 uint64 处理，
+ * 所以本实现也走 **有符号十进制** 范围。
+ */
+export function generateTraeDeviceIdInt(): string {
+  const span = DEVICE_ID_MAX - DEVICE_ID_MIN
+  // 拒绝模偏：用 BigInt 直接做 +1 取余再 +min，保证落在 [min, max]。
+  let r = 0n
+  while (r === 0n) {
+    const buf = new Uint8Array(8)
+    crypto.getRandomValues(buf)
+    r = BigInt('0x' + Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('')) % span
+  }
+  return (DEVICE_ID_MIN + r).toString()
+}
+
+/** TRAE 设备信息（ExchangeToken.DeviceInfo）。 */
+export interface TraeDeviceInfo {
+  DeviceID: string
+  MachineID: string
+  PlatformCode: 'IDE_PC'
+  DeviceType: 'PC'
+  DeviceName: string
+  DeviceModel: string
+  ClientVersion: string
+  DevicePublicKey: string
+  DeviceBrand: string
+  DeviceCPU: string
+  OSInfo: 'windows' | 'macos' | 'linux'
+  OSVersion: string
+}
+
+/** DeviceProof（ECDSA 签包）。 */
+export interface TraeDeviceProof {
+  Signature: string
+  Timestamp: number
+  Nonce: string
+}
+
+/**
+ * 把 Uint8Array 编码成 PEM（`-----BEGIN …-----\n<base64>\n-----END …-----`）。
+ * 每行 64 字符 base64。
+ */
+function pemWrap(label: string, der: Uint8Array): string {
+  const b64 = (typeof Buffer !== 'undefined' ? Buffer.from(der).toString('base64') : btoa(String.fromCharCode(...der)))
+  const lines = b64.match(/.{1,64}/g) ?? [b64]
+  return `-----BEGIN ${label}-----\n${lines.join('\n')}\n-----END ${label}-----\n`
+}
+
+/**
+ * 用 ECDSA P-256 私钥签 `signTraeDeviceProofMessage` 产生的消息。
+ *
+ * 签名消息格式（对齐 `edison7009/EchoBird src-tauri/src/services/trae_accounts/oauth.rs:410-413`）：
+ * ```text
+ * POST\n{path}\n{clientId}\n{refreshToken}\n{timestamp}\n{nonce}
+ * ```
+ * 六段，**以换行 \n 拼接**，**无前后空白**。
+ *
+ * 输出格式：**IEEE P1363（r||s 拼接）** —— TRAE 真实 Signature 88 字符
+ * base64 = 64 字节 = 32 + 32。WebCrypto `ECDSA` 默认就是 P1363。
+ * ⚠️ **不要**用 ASN.1 DER 格式（ring 库默认是 DER，需要自己拆掉再用）。
+ */
+export async function signTraeDeviceProof(
+  privateKeyPem: string,
+  message: string,
+): Promise<ArrayBuffer> {
+  const subtle = (globalThis.crypto as Crypto).subtle
+  if (!subtle) throw new Error('当前环境缺少 crypto.subtle，无法签名 DeviceProof')
+  const der = pemUnwrap(privateKeyPem, 'PRIVATE KEY')
+  const key = await subtle.importKey(
+    'pkcs8',
+    der,
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
+  )
+  return await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(message))
+}
+
+/**
+ * 拼装 DeviceProof 签名原文（6 段换行）。
+ *
+ * 与 {@link signTraeDeviceProof} 配对 —— 调用方签完再把结果 base64 编码填回 `Signature`。
+ */
+export function buildTraeDeviceProofMessage(args: {
+  path: string
+  clientId: string
+  refreshToken: string
+  timestamp: number
+  nonce: string
+}): string {
+  return ['POST', args.path, args.clientId, args.refreshToken, String(args.timestamp), args.nonce].join('\n')
+}
+
+/**
+ * 生成 16 字节 hex 字符串（DeviceProof.Nonce 用）。
+ * 32 hex 字符；实测真身（`main.log:87`）`"71ff7f4e1f19f63fdf1dab17134388b1"`。
+ */
+export function generateTraeNonce(): string {
+  const buf = new Uint8Array(16)
+  crypto.getRandomValues(buf)
+  return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** PKCS#8 / SPKI DER 反解（PEM → Uint8Array）。 */
+function pemUnwrap(pem: string, label: string): Uint8Array {
+  const begin = `-----BEGIN ${label}-----`
+  const end = `-----END ${label}-----`
+  const start = pem.indexOf(begin)
+  const stop = pem.indexOf(end)
+  if (start < 0 || stop < 0) throw new Error(`PEM 缺 ${begin}/${end} 标记`)
+  const b64 = pem.slice(start + begin.length, stop).replace(/\s+/g, '')
+  if (typeof Buffer !== 'undefined') return new Uint8Array(Buffer.from(b64, 'base64'))
+  const bin = atob(b64)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+
+/**
+ * PKCE `code_verifier`（43 字符 base64url，32 字节熵）。
+ *
+ * 对齐 `main.log:234` 真身 `"khz3eo6WMQxTGdDOGdgHaGNmdTirhDYls11MFw6AKdo6O-Hnlg8PyWii1Yu8EGCi"`。
+ */
+export function generateTraeCodeVerifier(): string {
+  const buf = new Uint8Array(32)
+  crypto.getRandomValues(buf)
+  let b64 = (typeof Buffer !== 'undefined' ? Buffer.from(buf).toString('base64') : btoa(String.fromCharCode(...buf)))
+  // base64 → base64url
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/**
+ * PKCE `code_challenge`（base64url(SHA-256(verifier))，43 字符）。
+ *
+ * 对齐 `main.log:218` 真身 `"a4nkSU-tWw-j7qHN_zWkJlQbmujFJ_Skeb-iSY1xRJo"` —— 43 字符 base64url。
+ */
+export async function buildTraeCodeChallenge(verifier: string): Promise<string> {
+  const subtle = (globalThis.crypto as Crypto).subtle
+  if (!subtle) throw new Error('当前环境缺少 crypto.subtle，无法派生 PKCE challenge')
+  const hash = await subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+  let b64 = (typeof Buffer !== 'undefined' ? Buffer.from(hash).toString('base64') : btoa(String.fromCharCode(...new Uint8Array(hash))))
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
 /**

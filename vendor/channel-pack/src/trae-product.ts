@@ -176,6 +176,29 @@ export interface TraeProduct {
   userAgent: string
   /** 远端模型列表不可用时的兜底模型目录。 */
   fallbackModels: readonly TraeFallbackModel[]
+  /**
+   * 是否走 **PKCE** 流程（`code_challenge` + `code_verifier`）。
+   *
+   * 设为 `true` 时 `buildTraeLoginURL` 会附加 `code_challenge=<base64url(SHA-256(verifier))>`
+   * + `code_challenge_method=S256`；回调拿到 `authCodeInfo` 后 `exchangeTraeCallback`
+   * 走 AuthCode 路径（带 `CodeVerifier`）。**必须**用 `generateTraeCodeVerifier` /
+   * `buildTraeCodeChallenge` 在登入前生成对。
+   *
+   * CN 不需要（默认 `false`）；TRAE 国际版实测（`main.log:218`）必走 PKCE。
+   */
+  pkceEnabled?: boolean
+  /**
+   * 是否走 **新协议 DeviceProof**（ECDSA P-256 签名 + DeviceInfo）。
+   *
+   * 设为 `true` 时 `exchangeTraeCallback` 在 refresh-token 路径
+   * 必须给 ExchangeToken body 加：
+   *   - `DeviceInfo`（13 字段，含 `DeviceID` / `MachineID` / `DevicePublicKey` …）
+   *   - `DeviceProof.{Signature, Timestamp, Nonce}`（用持久化私钥签 6 段换行）
+   *
+   * CN 协议兼容老格式（`ClientSecret:"-"` + `UserID`）不需要。**TRAE 国际版实测
+   * 老协议 401 + `20405 Device proof required`**（`main.log` 修复前表现）。
+   */
+  deviceKeyRequired?: boolean
 }
 
 /** 上游 API 基址（Agent 服务）。 */
@@ -476,6 +499,10 @@ export const TRAE_INTL: TraeProduct = {
   defaultCredentialRef: 'TRAE_INTL_ACCESS_TOKEN',
   userAgent: 'Trae/3.5.87 (stable_i18n; sg)',
   fallbackModels: TRAE_INTL_FALLBACK_MODELS,
+  // TRAE 国际版实测 (`main.log:218`, `main.log:87/234`) 走 PKCE 流程 +
+  // 新协议 DeviceProof；CN TRAE 不需要。
+  pkceEnabled: true,
+  deviceKeyRequired: true,
 }
 
 /**

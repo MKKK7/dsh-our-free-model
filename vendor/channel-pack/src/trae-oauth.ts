@@ -22,13 +22,22 @@ import { credentialExpiresAtMs, jwtExpiresAtMs } from './buddy.js'
 import {
   TRAE_LOGIN_TIMEOUT_MS,
   TRAE_REQUEST_TIMEOUT_MS,
+  buildTraeCodeChallenge,
   buildTraeCredential,
+  buildTraeDeviceProofMessage,
   generateDeviceId,
   generateMachineId,
+  generateTraeCodeVerifier,
+  generateTraeDeviceKeyPair,
+  generateTraeDeviceIdInt,
+  generateTraeNonce,
   parseTraeExchangeResponse,
   parseTraeUserInfoResponse,
+  signTraeDeviceProof,
   traeOAuthHeaders,
   type TraeCredential,
+  type TraeDeviceInfo,
+  type TraeDeviceKeyPair,
   type TraeExchangeResult,
   type TraeUserInfoResult,
 } from './trae.js'
@@ -103,10 +112,18 @@ export function buildTraeLoginURL(
   machineId: string,
   deviceId: string,
   callbackUrl: string,
+  /**
+   * PKCE `code_challenge`（base64url(SHA-256(verifier))）。
+   * - 传空字符串 = 不附 PKCE 字段（CN 协议）；
+   * - 传非空 = 视为 PKCE 流程（TRAE 国际版必走，实测 `main.log:218`）。
+   */
+  codeChallenge: string = '',
 ): string {
+  const isIntl = product.pkceEnabled === true
   const params = new URLSearchParams({
     login_version: '1',
-    auth_from: 'solo',
+    // TRAE 国际版实测是 `auth_from=trae`（`main.log:218`）；CN 是 `solo`。
+    auth_from: isIntl ? 'trae' : 'solo',
     login_channel: 'native_ide',
     plugin_version: product.pluginVersion,
     auth_type: 'local',
@@ -119,12 +136,19 @@ export function buildTraeLoginURL(
     device_id: deviceId,
     x_device_id: deviceId,
     x_machine_id: machineId,
-    x_device_brand: 'PC',
-    x_device_type: 'PC',
-    x_os_version: '1.0',
+    // TRAE 国际版真身（`main.log:218`）x_device_brand 是**主板型号**（`90Q1006DCP`），
+    // 不是 CN 的字面量 `PC`。CN 保持原样以免破坏老账号。
+    x_device_brand: isIntl ? '90Q1006DCP' : 'PC',
+    x_device_type: isIntl ? 'windows' : 'PC',
+    x_os_version: isIntl ? encodeURIComponent(product.osVersion) : '1.0',
     x_app_version: product.ideVersion,
     x_app_type: 'stable',
+    channel_name: 'common',
   })
+  if (codeChallenge.length > 0) {
+    params.set('code_challenge', codeChallenge)
+    params.set('code_challenge_method', 'S256')
+  }
   return `${product.consoleHost}/authorization?${params.toString()}`
 }
 
@@ -161,6 +185,14 @@ export interface TraeCallbackInfo {
    * 「缺少 refreshToken」。
    */
   authCode?: string
+  /**
+   * PKCE 流程的 `code_verifier`（TRAE 国际版 `exchangeTokenByAuthCode` 路径必带）。
+   *
+   * 上游实测在 `authCodeInfo` 之外**没有**回传 verifier；调用方必须在
+   * `buildTraeLoginURL` 之前先用 `generateTraeCodeVerifier` 生成并**自己留着**。
+   * 本字段在解析层留作接口对齐 —— 实际由调用方在 `exchangeTraeCallback` 前注入。
+   */
+  codeVerifier?: string
 }
 
 /**
@@ -267,6 +299,101 @@ export function parseTraeCallback(rawUrl: string): TraeCallbackInfo | undefined 
   return result.ok ? result.info : undefined
 }
 
+// ── TRAE 国际版 DeviceInfo 构建 ──
+
+/**
+ * 把 `product.osVersion` 归一到 TRAE 国际版 `DeviceInfo.OSInfo` 枚举值
+ * （`windows` / `macos` / `linux`）。
+ *
+ * 缺省：当前是 Windows → `windows`。
+ * product.osVersion 形如 `"Windows 11 Pro"` / `"macOS 15.7.4"` / `"Linux 6.x"`。
+ */
+function intlOsInfo(product: TraeProduct): 'windows' | 'macos' | 'linux' {
+  const v = product.osVersion.toLowerCase()
+  if (v.startsWith('mac') || v.includes('darwin')) return 'macos'
+  if (v.startsWith('linux') || v.includes('ubuntu') || v.includes('debian')) return 'linux'
+  return 'windows'
+}
+
+/**
+ * 提取主板/设备品牌（TRAE 国际版 `DeviceInfo.DeviceBrand` / `DeviceModel`）。
+ *
+ * 真身（`main.log:87`）：`DeviceBrand=LENOVO` + `DeviceModel=90Q1006DCP`。
+ * 真实机器拿 `os.hostname()` 拼 `os.cpus()` 即可；本实现**不**动用
+ * `node:os` —— 走简化：把 product.osVersion 头段（"Windows 11 Pro" → "Windows"）
+ * 之外的串 hash 一下当 deviceModel，deviceBrand 用 product.deviceBrand。
+ *
+ * ⚠️ 实际服务端可能校验 brand/model 跟首次登录一致，所以**首次登录时**记录
+ * 一份到 `device_brand` / `device_model` 字段，后续复用。
+ */
+function intlDeviceBrandModel(product: TraeProduct): { brand: string; model: string } {
+  return { brand: product.deviceBrand, model: 'PC' }
+}
+
+/** DeviceInfo.DeviceName：通常取 OS 用户名（TRAE 真身用 `os.userInfo().username`）。 */
+function intlDeviceName(): string {
+  try {
+    // 仅在 Node 环境有 `node:os`；pack.js 打包 esbuild 也能解析。
+    // 用 require 以免被 import-only 工具误判。
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const os = require('node:os') as typeof import('node:os')
+    return os.userInfo().username
+  } catch {
+    return 'user'
+  }
+}
+
+/**
+ * 组装 TRAE 国际版 `DeviceInfo`（13 字段，对齐 `main.log:87` 真身）。
+ *
+ * ## 字段对应
+ * | 字段 | 取值 |
+ * |---|---|
+ * | `DeviceID` | 19 位十进制（`generateTraeDeviceIdInt`） |
+ * | `MachineID` | 32 hex（`session.machineId`） |
+ * | `PlatformCode` | 常量 `IDE_PC` |
+ * | `DeviceType` | 常量 `PC` |
+ * | `DeviceName` | OS 用户名 |
+ * | `DeviceModel` | 主板型号（best-effort） |
+ * | `ClientVersion` | `product.ideVersion` |
+ * | `DevicePublicKey` | 持久化 PEM |
+ * | `DeviceBrand` | 主板品牌 |
+ * | `DeviceCPU` | `os.cpus()[0].model` |
+ * | `OSInfo` | `windows` / `macos` / `linux` |
+ * | `OSVersion` | `product.osVersion` |
+ */
+export function buildIntlDeviceInfo(
+  session: { machineId: string; deviceId: string },
+  product: TraeProduct,
+  publicKeyPem: string,
+): TraeDeviceInfo {
+  const { brand, model } = intlDeviceBrandModel(product)
+  let cpu = 'unknown'
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const os = require('node:os') as typeof import('node:os')
+    cpu = os.cpus()[0]?.model ?? 'unknown'
+  } catch { /* ignore */ }
+  // `session.deviceId` 是 32 hex；TRAE 国际版要 19 位十进制 DeviceID。
+  // 用一个确定性派生：`BigInt('0x'+deviceId.slice(0,16)) % (1e19-1) + 1e18`。
+  const slice = session.deviceId.replace(/[^0-9a-f]/gi, '').slice(0, 16).padEnd(16, '0')
+  const deviceIdInt = ((BigInt('0x' + slice) % (9_999_999_999_999_999_999n - 1_000_000_000_000_000_000n)) + 1_000_000_000_000_000_000n).toString()
+  return {
+    DeviceID: deviceIdInt,
+    MachineID: session.machineId,
+    PlatformCode: 'IDE_PC',
+    DeviceType: 'PC',
+    DeviceName: intlDeviceName(),
+    DeviceModel: model,
+    ClientVersion: product.ideVersion,
+    DevicePublicKey: publicKeyPem,
+    DeviceBrand: brand,
+    DeviceCPU: cpu,
+    OSInfo: intlOsInfo(product),
+    OSVersion: product.osVersion,
+  }
+}
+
 /**
  * 解析回调并**带回失败原因**（供回调服务器写出可读文案与日志）。
  *
@@ -328,14 +455,12 @@ export function parseTraeCallbackDetailed(rawUrl: string): TraeCallbackParseResu
   // ── 判定 ──
   if (info.refreshToken.length === 0 && info.accessToken.length === 0) {
     if (authCode.length > 0) {
-      // ⚠️ 关键：这是**合法回调**，只是走了我们尚未支持的 PKCE 分支。
-      // 不能判为「无效」，否则用户看到的错误会指向完全错误的方向。
-      return {
-        ok: false,
-        authCodeFlow: true,
-        reason: '上游返回了 PKCE 授权码（code/authCodeInfo），本实现暂不支持该流程；'
-          + '请确认 TRAE 授权页是否已切换到新流程',
-      }
+      // ⚠️ 关键：这是**合法回调**，PKCE 流程。
+      // 之前实现判 ok:false 是因为当时不支持；现在 `exchangeTraeCallback`
+      // 已经能在 caller 注入 verifier 时走 AuthCode 路径，**改返 ok:true**，
+      // caller（`startCallbackServer`）会把 `info` 透传给 exchangeTraeCallback
+      // 完成换 token。
+      return { ok: true, info, authCodeFlow: true }
     }
     return {
       ok: false,
@@ -370,15 +495,75 @@ export async function exchangeTraeCallback(
   product: TraeProduct,
   fetcher: typeof fetch = fetch,
   nowMs: number = Date.now(),
+  /**
+   * TRAE 国际版**已持久化**的 ECDSA 密钥对；首次登录传空对象，
+   * 内部自动生成并**回填**到返回的 `TraeCredential.device_key_pair`。
+   * CN 协议忽略此参数。
+   */
+  existingKeyPair: { public_key: string; private_key: string } | null = null,
+  /**
+   * PKCE `code_verifier`（TRAE 国际版 AuthCode 路径必带）。
+   * CN 协议忽略此参数。回调里通常**没有** verifier，要由 caller 在
+   * `buildTraeLoginURL` 之前自己生成。
+   */
+  codeVerifier: string = '',
 ): Promise<TraeCredential> {
   let exchange: TraeExchangeResult
-  if (callback.refreshToken.length > 0) {
+  let generatedKeyPair: TraeDeviceKeyPair | undefined
+  if (callback.refreshToken.length > 0 || callback.authCode) {
     // ── 分支 1：ExchangeToken（access + refreshToken 轮换）──
-    const exchangeBody = {
-      ClientID: product.clientId,
-      RefreshToken: callback.refreshToken,
-      ClientSecret: '-',
-      UserID: '',
+    // TRAE 国际版走 **新协议**（带 DeviceInfo + DeviceProof for refresh，
+    // 走 AuthCode 时不带 DeviceProof 但仍发 DeviceInfo）。
+    // CN 走老协议 `{ClientID, ClientSecret:"-", RefreshToken, UserID:""}`。
+    const isIntl = product.pkceEnabled === true
+    const isDeviceKey = product.deviceKeyRequired === true
+    let exchangeBody: Record<string, unknown>
+    if (isIntl && callback.authCode) {
+      // PKCE AuthCode 路径（首次登录或 refreshToken 过期被拒转 code 流程）。
+      const keyPair = existingKeyPair ?? (await generateTraeDeviceKeyPair())
+      if (!existingKeyPair) generatedKeyPair = keyPair
+      const deviceInfo = buildIntlDeviceInfo(session, product, keyPair.public_key)
+      exchangeBody = {
+        ClientID: product.clientId,
+        AuthCode: callback.authCode,
+        CodeVerifier: codeVerifier,
+        DeviceInfo: deviceInfo,
+        IDEVersion: product.ideVersion,
+      }
+    } else if (isDeviceKey) {
+      // refresh 路径（TRAE 国际版）：必带 DeviceInfo + DeviceProof。
+      const keyPair = existingKeyPair ?? (await generateTraeDeviceKeyPair())
+      if (!existingKeyPair) generatedKeyPair = keyPair
+      const deviceInfo = buildIntlDeviceInfo(session, product, keyPair.public_key)
+      const timestamp = Math.floor(nowMs / 1000)
+      const nonce = generateTraeNonce()
+      const message = buildTraeDeviceProofMessage({
+        path: traeExchangePathFor(product),
+        clientId: product.clientId,
+        refreshToken: callback.refreshToken,
+        timestamp,
+        nonce,
+      })
+      const signatureBuf = await signTraeDeviceProof(keyPair.private_key, message)
+      const signature = (typeof Buffer !== 'undefined'
+        ? Buffer.from(signatureBuf).toString('base64')
+        : btoa(String.fromCharCode(...new Uint8Array(signatureBuf))))
+      exchangeBody = {
+        ClientID: product.clientId,
+        ClientSecret: '',
+        RefreshToken: callback.refreshToken,
+        DeviceInfo: deviceInfo,
+        DeviceProof: { Signature: signature, Timestamp: timestamp, Nonce: nonce },
+        IDEVersion: product.ideVersion,
+      }
+    } else {
+      // CN 老协议。
+      exchangeBody = {
+        ClientID: product.clientId,
+        RefreshToken: callback.refreshToken,
+        ClientSecret: '-',
+        UserID: '',
+      }
     }
     const exchangeResp = await fetcher(`${product.oauthHost}${traeExchangePathFor(product)}`, {
       method: 'POST',
@@ -394,7 +579,7 @@ export async function exchangeTraeCallback(
     if (parsed === undefined) throw new Error('TRAE ExchangeToken 响应缺少 Token')
     exchange = parsed
   } else {
-    // ── 分支 2：无 refreshToken，直接用 userJwt.Token 兜底 ──
+    // ── 分支 2：无 refreshToken / 无 authCode，直接用 userJwt.Token 兜底 ──
     exchange = {
       accessToken: callback.accessToken,
       refreshToken: '',
@@ -446,7 +631,14 @@ export async function exchangeTraeCallback(
     throw new Error('TRAE 换 token 后没有 accessToken')
   }
 
-  return buildTraeCredential(exchange, userInfo, session, nowMs)
+  return buildTraeCredential(
+    exchange,
+    userInfo,
+    session,
+    nowMs,
+    generatedKeyPair ? { public_key: generatedKeyPair.public_key, private_key: generatedKeyPair.private_key } : undefined,
+    codeVerifier,
+  )
 }
 
 /**
@@ -559,16 +751,29 @@ export async function runTraeLoginFlow(
   const deviceId = generateDeviceId()
   const preferredPort = options.callbackPort ?? TRAE_CALLBACK_PORT
 
+  // TRAE 国际版要走 PKCE：先生成 code_verifier + challenge。
+  // CN 走老协议，verifier 留空。
+  const isPkce = options.product.pkceEnabled === true
+  const codeVerifier = isPkce ? generateTraeCodeVerifier() : ''
+  const codeChallenge = isPkce ? await buildTraeCodeChallenge(codeVerifier) : ''
+
   // 先监听拿到实际端口（首选被占用时会回退到随机端口），
   // 再用实际端口构造 loginUrl —— redirect_uri 必须与实际监听一致。
   // 先监听拿到实际端口（首选被占用时会回退到随机端口），
   // 再用实际端口构造 loginUrl —— auth_callback_url 必须与实际监听一致。
-  const { callback, port } = await startCallbackServer(preferredPort, options.product.consoleHost)
+  const { callback, port } = await startCallbackServer(
+    preferredPort,
+    options.product.consoleHost,
+    TRAE_LOGIN_TIMEOUT_MS,
+    codeVerifier,
+  )
   const callbackUrl = `http://127.0.0.1:${port}/authorize`
-  const loginUrl = buildTraeLoginURL(options.product, machineId, deviceId, callbackUrl)
+  const loginUrl = buildTraeLoginURL(options.product, machineId, deviceId, callbackUrl, codeChallenge)
 
   const credential = await exchangeTraeCallback(
     callback, { machineId, deviceId }, options.product, options.fetcher,
+    undefined,
+    codeVerifier,
   )
 
   const access = JSON.stringify(credential)
@@ -602,6 +807,11 @@ export async function startTraeLoginFlow(
   const machineId = generateMachineId()
   const deviceId = generateDeviceId()
   const preferredPort = options.callbackPort ?? TRAE_CALLBACK_PORT
+
+  // TRAE 国际版走 PKCE：先生成 code_verifier + challenge。
+  const isPkce = options.product.pkceEnabled === true
+  const codeVerifier = isPkce ? generateTraeCodeVerifier() : ''
+  const codeChallenge = isPkce ? await buildTraeCodeChallenge(codeVerifier) : ''
 
   const server = createServer()
   let resultTimer: ReturnType<typeof setTimeout> | undefined
@@ -646,7 +856,7 @@ export async function startTraeLoginFlow(
       const callback = parsed.info
 
       // 异步完成剩余流程
-      exchangeTraeCallback(callback, { machineId, deviceId }, options.product, options.fetcher)
+      exchangeTraeCallback(callback, { machineId, deviceId }, options.product, options.fetcher, undefined, codeVerifier)
         .then((credential) => {
           if (resultTimer) clearTimeout(resultTimer)
           const access = JSON.stringify(credential)
@@ -692,7 +902,7 @@ export async function startTraeLoginFlow(
 
   // ── 2. 监听成功后才构造登录 URL：redirect_uri 必须写**实际**端口 ──
   const callbackUrl = `http://127.0.0.1:${actualPort}/authorize`
-  loginUrl = buildTraeLoginURL(options.product, machineId, deviceId, callbackUrl)
+  loginUrl = buildTraeLoginURL(options.product, machineId, deviceId, callbackUrl, codeChallenge)
 
   return {
     loginUrl,
@@ -721,6 +931,12 @@ export async function startCallbackServer(
   port: number = TRAE_CALLBACK_PORT,
   _consoleHost?: string,
   timeoutMs: number = TRAE_LOGIN_TIMEOUT_MS,
+  /**
+   * TRAE 国际版 PKCE `code_verifier` —— 在回调服务器收到的 authCode 路径上
+   * 会回写进 `callback.codeVerifier`，让 caller 在 `exchangeTraeCallback`
+   * 走 AuthCode 路径时能直接用。CN 协议可传空串（忽略）。
+   */
+  codeVerifier: string = '',
 ): Promise<{ callback: TraeCallbackInfo; port: number }> {
   const server = createServer()
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -752,7 +968,7 @@ export async function startCallbackServer(
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
       res.end('已收到 TRAE 授权，正在换取凭据…可以关闭此页面。')
       server.close()
-      resolve({ callback: parsed.info, port: actualPort })
+      resolve({ callback: { ...parsed.info, codeVerifier }, port: actualPort })
     })
 
     timer = setTimeout(() => {
