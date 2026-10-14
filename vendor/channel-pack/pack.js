@@ -45188,14 +45188,41 @@ function fixNicknameMojibake(raw, uid) {
   if (!/[\u4e00-\u9fff]/.test(raw)) return `\u7528\u6237${uid.slice(-4)}`;
   return raw;
 }
-function intlOsInfo(product) {
-  const v = product.osVersion.toLowerCase();
-  if (v.startsWith("mac") || v.includes("darwin")) return "macos";
-  if (v.startsWith("linux") || v.includes("ubuntu") || v.includes("debian")) return "linux";
+function intlOsInfo() {
+  try {
+    const os = __require("node:os");
+    const platform = os.platform();
+    if (platform === "win32") return "windows";
+    if (platform === "darwin") return "macos";
+    if (platform === "linux") return "linux";
+  } catch {
+  }
   return "windows";
 }
-function intlDeviceBrandModel(product) {
-  return { brand: product.deviceBrand, model: "PC" };
+var cachedBrandModel = null;
+function intlDeviceBrandModel(_product) {
+  if (cachedBrandModel !== null) return cachedBrandModel;
+  try {
+    const { execSync } = __require("node:child_process");
+    const ps = "Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object Manufacturer,Model | ConvertTo-Csv -NoTypeInformation";
+    const out = execSync(`powershell.exe -NoProfile -NonInteractive -Command "${ps}"`, {
+      encoding: "utf8",
+      timeout: 3e3,
+      windowsHide: true
+    });
+    const lines = out.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length >= 2) {
+      const values = lines[1].split(",").map((v) => v.replace(/^"|"$/g, "").trim());
+      const brand = values[0] ?? "";
+      const model = values[1] ?? "";
+      if (brand.length > 0 && model.length > 0) {
+        cachedBrandModel = { brand, model };
+        return cachedBrandModel;
+      }
+    }
+  } catch {
+  }
+  return { brand: "unknown", model: "unknown" };
 }
 function intlDeviceName() {
   try {
@@ -45206,7 +45233,7 @@ function intlDeviceName() {
   }
 }
 function buildIntlDeviceInfo(session, product, publicKeyPem) {
-  const { brand, model } = intlDeviceBrandModel(product);
+  const { brand, model } = intlDeviceBrandModel();
   let cpu = "unknown";
   try {
     const os = __require("node:os");
@@ -45226,8 +45253,17 @@ function buildIntlDeviceInfo(session, product, publicKeyPem) {
     DevicePublicKey: publicKeyPem,
     DeviceBrand: brand,
     DeviceCPU: cpu,
-    OSInfo: intlOsInfo(product),
-    OSVersion: product.osVersion
+    OSInfo: intlOsInfo(),
+    // OSVersion 走 `os.version()`（真身 "Windows 11 Pro"）。
+    // product.osVersion 写的是字面占位，不能直接发给上游。
+    OSVersion: (() => {
+      try {
+        const os = __require("node:os");
+        return os.version();
+      } catch {
+        return product.osVersion;
+      }
+    })()
   };
 }
 function parseTraeCallbackDetailed(rawUrl) {

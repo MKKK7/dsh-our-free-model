@@ -302,16 +302,29 @@ export function parseTraeCallback(rawUrl: string): TraeCallbackInfo | undefined 
 // ── TRAE 国际版 DeviceInfo 构建 ──
 
 /**
- * 把 `product.osVersion` 归一到 TRAE 国际版 `DeviceInfo.OSInfo` 枚举值
+ * 探测当前操作系统的 TRAE 国际版 `DeviceInfo.OSInfo` 枚举值
  * （`windows` / `macos` / `linux`）。
  *
- * 缺省：当前是 Windows → `windows`。
- * product.osVersion 形如 `"Windows 11 Pro"` / `"macOS 15.7.4"` / `"Linux 6.x"`。
+ * ## 为什么不用 product.osVersion
+ *
+ * product.osVersion 是**产品配置字面量**（CN TRAE 写 "macOS 15.7.4"，
+ * 实际跑在 Windows 机器上）。如果直接归一它，会把 `OSInfo` 也报成
+ * `macos` —— 这是 2026-10-14 第一次实测踩到的坑（错误码 10101
+ * `Invalid param`，因为 brand=`Apple` + osInfo=`macos` 跟实际 Windows
+ * 设备指纹对不上）。
+ *
+ * 真身（`main.log:87`）是 Windows 机器，所以 `OSInfo=windows` —— 跟着
+ * **`os.platform()` 实际探测** 走，与 OSVersion 字段保持一致。
  */
-function intlOsInfo(product: TraeProduct): 'windows' | 'macos' | 'linux' {
-  const v = product.osVersion.toLowerCase()
-  if (v.startsWith('mac') || v.includes('darwin')) return 'macos'
-  if (v.startsWith('linux') || v.includes('ubuntu') || v.includes('debian')) return 'linux'
+function intlOsInfo(): 'windows' | 'macos' | 'linux' {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const os = require('node:os') as typeof import('node:os')
+    const platform = os.platform()
+    if (platform === 'win32') return 'windows'
+    if (platform === 'darwin') return 'macos'
+    if (platform === 'linux') return 'linux'
+  } catch { /* fall through */ }
   return 'windows'
 }
 
@@ -319,15 +332,47 @@ function intlOsInfo(product: TraeProduct): 'windows' | 'macos' | 'linux' {
  * 提取主板/设备品牌（TRAE 国际版 `DeviceInfo.DeviceBrand` / `DeviceModel`）。
  *
  * 真身（`main.log:87`）：`DeviceBrand=LENOVO` + `DeviceModel=90Q1006DCP`。
- * 真实机器拿 `os.hostname()` 拼 `os.cpus()` 即可；本实现**不**动用
- * `node:os` —— 走简化：把 product.osVersion 头段（"Windows 11 Pro" → "Windows"）
- * 之外的串 hash 一下当 deviceModel，deviceBrand 用 product.deviceBrand。
+ * 实测本机 `Get-CimInstance -ClassName Win32_ComputerSystem` 给出
+ * `Manufacturer=LENOVO` + `Model=90Q1006DCP` —— **不是**主板型号
+ * （`Win32_BaseBoard.Product=3728` 是另一回事），而是**机器型号/SKU**。
  *
- * ⚠️ 实际服务端可能校验 brand/model 跟首次登录一致，所以**首次登录时**记录
- * 一份到 `device_brand` / `device_model` 字段，后续复用。
+ * 实现方式：
+ * - 通过 `child_process.execSync` 同步跑 PowerShell `Get-CimInstance`；
+ * - **首次**调用（约 200ms）拿到值后**缓存到 module scope**，
+ *   后续（refresh 等同进程内重复调用）走缓存；
+ * - **失败时**回退到 `product.deviceBrand` / 字面量 `'PC'`，确保签名仍能发出。
+ *
+ * ⚠️ TRAE 服务端疑似按 brand/model 做**设备指纹绑定**（10101 Invalid param
+ * 与 brand='Apple'/model='PC' 同时出现）—— 失败回退的字面量一定不能再次
+ * 上报；所以**只在 CIM 完全拿不到时**才回退。
  */
-function intlDeviceBrandModel(product: TraeProduct): { brand: string; model: string } {
-  return { brand: product.deviceBrand, model: 'PC' }
+let cachedBrandModel: { brand: string; model: string } | null = null
+function intlDeviceBrandModel(_product: TraeProduct): { brand: string; model: string } {
+  if (cachedBrandModel !== null) return cachedBrandModel
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { execSync } = require('node:child_process') as typeof import('node:child_process')
+    // PowerShell CIM 查 Manufacturer + Model，CIM 是 Win11 推荐 API。
+    // 用 `,` 分隔 + trim 拿稳：两列各占一行，CIM 默认按表格输出。
+    const ps = 'Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object Manufacturer,Model | ConvertTo-Csv -NoTypeInformation'
+    const out = execSync(`powershell.exe -NoProfile -NonInteractive -Command "${ps}"`, {
+      encoding: 'utf8',
+      timeout: 3000,
+      windowsHide: true,
+    }) as string
+    // 解析 CSV：第一行 header，第二行 values。
+    const lines = out.split(/\r?\n/).filter((l) => l.trim().length > 0)
+    if (lines.length >= 2) {
+      const values = lines[1].split(',').map((v) => v.replace(/^"|"$/g, '').trim())
+      const brand = values[0] ?? ''
+      const model = values[1] ?? ''
+      if (brand.length > 0 && model.length > 0) {
+        cachedBrandModel = { brand, model }
+        return cachedBrandModel
+      }
+    }
+  } catch { /* fall through to fallback */ }
+  return { brand: 'unknown', model: 'unknown' }
 }
 
 /** DeviceInfo.DeviceName：通常取 OS 用户名（TRAE 真身用 `os.userInfo().username`）。 */
@@ -367,7 +412,7 @@ export function buildIntlDeviceInfo(
   product: TraeProduct,
   publicKeyPem: string,
 ): TraeDeviceInfo {
-  const { brand, model } = intlDeviceBrandModel(product)
+  const { brand, model } = intlDeviceBrandModel()
   let cpu = 'unknown'
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -389,8 +434,18 @@ export function buildIntlDeviceInfo(
     DevicePublicKey: publicKeyPem,
     DeviceBrand: brand,
     DeviceCPU: cpu,
-    OSInfo: intlOsInfo(product),
-    OSVersion: product.osVersion,
+    OSInfo: intlOsInfo(),
+    // OSVersion 走 `os.version()`（真身 "Windows 11 Pro"）。
+    // product.osVersion 写的是字面占位，不能直接发给上游。
+    OSVersion: (() => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const os = require('node:os') as typeof import('node:os')
+        return os.version()
+      } catch {
+        return product.osVersion
+      }
+    })(),
   }
 }
 
