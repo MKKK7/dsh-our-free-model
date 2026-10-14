@@ -879,8 +879,12 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
   // 以及一张自己的 8 条国际版模型表）。刻意**不复制**任何 trae*.ts 实现文件
   // —— 协议同源，复制会让同类缺陷（SSE 漏帧、续期串路、签到幂等）修两遍。
   // 服务名由 TraeAuth 依 product.id 派生，注册为 ctx.traeIntlAuth。
+  // ⚠️ **必须显式传 product + serviceName**——两个 TraeAuth 实例若不传，构造默认
+  // product=TRAE / serviceName=traeAuth，cordis 就会抛
+  //   "service 'traeAuth' has been registered at <our-free-model>"
+  // 整个 free-channel pack 因此被拒载，UI 14 张卡全空。
   // 不注册斜杠命令：入口在 Channel Pack 的「TRAE (国际版)」面板。
-  const traeIntl = new TraeAuth(ctx)
+  const traeIntl = new TraeAuth(ctx, { product: TRAE_INTL, serviceName: 'traeIntlAuth' })
   const traeIntlAdapter = registerTraeLlm(ctx, {
     credentialRef: credentialRef(TRAE_INTL.defaultCredentialRef),
     resolveCredential: async (modelId?: string) => {

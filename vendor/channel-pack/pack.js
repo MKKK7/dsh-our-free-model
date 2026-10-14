@@ -67723,7 +67723,7 @@ function apply(ctx, config = {}) {
     accountPool: pool,
     product: TRAE
   });
-  const traeIntl = new TraeAuth(ctx);
+  const traeIntl = new TraeAuth(ctx, { product: TRAE_INTL, serviceName: "traeIntlAuth" });
   const traeIntlAdapter = registerTraeLlm(ctx, {
     credentialRef: credentialRef16(TRAE_INTL.defaultCredentialRef),
     resolveCredential: async (modelId) => {
