@@ -39,6 +39,8 @@ import {
   readNumberField,
   isTraeModelCallable,
   traeMaxModeFields,
+  fetchTraeChatJwt,
+  sealTraeEnvelope,
   traeSOLOHeaders,
   transformToSOLOBody,
   type TraeCredential,
@@ -49,6 +51,18 @@ import {
 import { TRAE, traeChatPathFor, type TraeFallbackModel, type TraeProduct } from './trae-product.js'
 import { classifyTraeError, recordsTraeRateLimit, shouldRotateTraeAccount } from './trae-errors.js'
 import { normalizeHarnessMessages } from './message-shape.js'
+
+/**
+ * 一次已构造好的 chat 请求（body + 头）。
+ *
+ * 之所以把「构造」与「发送」拆成两步：国际版的 body 里装着**一次性信封**
+ * （AES-GCM + `X-Request-Pin`），服务端按 pin 防重放，所以每次重试都必须
+ * 重新构造，不能复用同一份序列化字符串。
+ */
+interface TraePreparedRequest {
+  body: string
+  headers: Record<string, string>
+}
 import { createBlankReasoningSuppressor, createReasoningLoopDetector, hasUsableToolName, isProseTruncatedByStopString, isReasoningLoopGuardEnabled, isTruncatedArguments, normalizeToolArguments, readWithIdleTimeout, reasoningLoopFailure, resolveEmptyResponseReason, resolveToolPairing, splitThinkTaggedContent, stripBareThinkCloseTagIfEnabled, stripCourseLeakFromHistoryContent, stripCourseLeakIfEnabled } from './sse.js'
 import {
   registerAdapterIdempotent,
@@ -1058,7 +1072,23 @@ export class TraeAdapter extends LlmAdapter {
     const body = JSON.stringify(bodyObj)
 
     // 4. 发送请求（401/403 时刷新一次凭据后重试）
-    let response = await this.send(credential, body, options)
+    //
+    // ⚠️ 国际版（`llm_raw_chat`）不能复用序列化好的 body：它的 body 里装着
+    // **一次性信封**（AES-GCM + pin），服务端按 pin 防重放，第二次提交同一个
+    // pin 会返回流内 `4120`。所以这里传的是「按凭据现场构造请求」的函数，
+    // 每次重试（含账号轮换）都重新取 JWT、重新封信封。
+    const intlMessages = this.product.id === 'trae_intl'
+      ? (openaiBody.messages as unknown[])
+      : undefined
+    const prepare = intlMessages !== undefined
+      ? (c: TraeCredential): Promise<TraePreparedRequest> =>
+          this.prepareIntlRequest(c, options.model, intlMessages)
+      : (c: TraeCredential): Promise<TraePreparedRequest> => Promise.resolve({
+          body,
+          headers: traeSOLOHeaders(c, this.product, true, this.machineIdGeneration()),
+        })
+
+    let response = await this.send(credential, prepare, options)
     if (!response.ok && (response.status === 401 || response.status === 403)) {
       await this.options.refresh()
       // 与主路径一致：按本模型选号（跳过正在限流的账号）。
@@ -1067,7 +1097,7 @@ export class TraeAdapter extends LlmAdapter {
         throw new LlmError('trae: credential expired and refresh failed', 'AUTH', { status: response.status })
       }
       credential = refreshed
-      response = await this.send(credential, body, options)
+      response = await this.send(credential, prepare, options)
     }
     if (!response.ok) {
       let errorText = await response.text().catch(() => '')
@@ -1094,7 +1124,7 @@ export class TraeAdapter extends LlmAdapter {
           tried.add(next.entry.id)
           credential = next.credential as TraeCredential
           currentAccountId = next.entry.id
-          response = await this.send(credential, body, options)
+          response = await this.send(credential, prepare, options)
           if (response.ok) {
             yield* this.consumeSse(response, options)
             return
@@ -1173,7 +1203,7 @@ export class TraeAdapter extends LlmAdapter {
           triedStreamAccounts.add(next.entry.id)
           credential = next.credential as TraeCredential
           currentAccountId = next.entry.id
-          response = await this.send(credential, body, options)
+          response = await this.send(credential, prepare, options)
           if (!response.ok) {
             const text = await response.text().catch(() => '')
             const kind = classifyTraeError(response.status, text)
@@ -1191,7 +1221,7 @@ export class TraeAdapter extends LlmAdapter {
           && error.message.includes('upstream returned no events')
         if (!empty || attempt >= 1) throw error
         if (options.signal?.aborted) throw error
-        response = await this.send(credential, body, options)
+        response = await this.send(credential, prepare, options)
         if (!response.ok) {
           const text = await response.text().catch(() => '')
           throw new LlmError(`trae: ${errorDetail(text)}`, httpErrorCode(response.status), { status: response.status })
@@ -1203,18 +1233,16 @@ export class TraeAdapter extends LlmAdapter {
   /** 发起一次 chat 请求；网络失败映射为可重试的 TRANSPORT 错误。 */
   private async send(
     credential: TraeCredential,
-    body: string,
+    prepare: (c: TraeCredential) => Promise<TraePreparedRequest>,
     options: GenerateOptions,
   ): Promise<Response> {
     this.sendCount += 1
-    const headers = new Headers(
-      traeSOLOHeaders(credential, this.product, true, this.machineIdGeneration()),
-    )
     try {
+      const prepared = await prepare(credential)
       return await this.fetchImpl(`${this.product.agentHost}${traeChatPathFor(this.product)}`, {
         method: 'POST',
-        headers,
-        body,
+        headers: new Headers(prepared.headers),
+        body: prepared.body,
         signal: options.signal,
       })
     } catch (error) {
@@ -1223,6 +1251,49 @@ export class TraeAdapter extends LlmAdapter {
         throw new LlmError(`trae: transport error: ${errorMessage(error)}`, 'TRANSPORT', { cause: error as Error })
       }
       throw error
+    }
+  }
+
+  /**
+   * 构造国际版 `llm_raw_chat` 的请求（CN 不走这里）。
+   *
+   * 协议逐项还原自 `aiserver/server.js` deob 偏移 11871652 的 `ASe.llmRawChat`：
+   * 1. messages 映射为 `{role, content:[{type:'text', text}]}`（**字符串 content
+   *    必须包成单元素数组**，客户端就是这么做的）；
+   * 2. `sealTraeEnvelope(JSON.stringify(msgs))` 得到 `message` / `requestPin` / `requestAt`；
+   * 3. body = `{model_name, message}`（**只有这两个字段**，没有 stream / temperature）；
+   * 4. 头 = SOLO 头 + `{get-svc: 1, X-Request-Pin, X-Requested-At}`，
+   *    并把 `Authorization` 换成临时 JWT。
+   *
+   * ⚠️ 每次调用都要重新取 JWT 并重新封信封 —— pin 复用会被 `4120` 防重放拒绝。
+   */
+  private async prepareIntlRequest(
+    credential: TraeCredential,
+    modelName: string,
+    messages: readonly unknown[],
+  ): Promise<TraePreparedRequest> {
+    const wire = messages.map((m) => {
+      const message = m as { role?: string; content?: unknown; name?: string }
+      const text = typeof message.content === 'string'
+        ? message.content
+        : JSON.stringify(message.content ?? '')
+      const item: Record<string, unknown> = {
+        role: message.role ?? 'user',
+        content: [{ type: 'text', text }],
+      }
+      if (message.name !== undefined && message.role === 'tool') item.name = message.name
+      return item
+    })
+    const envelope = sealTraeEnvelope(Buffer.from(JSON.stringify(wire)))
+    const headers = traeSOLOHeaders(credential, this.product, true, this.machineIdGeneration())
+    // 认证形态：Authorization 必须是临时 JWT，X-Cloudide-Token 保持 OAuth access_token。
+    headers.Authorization = `Cloud-IDE-JWT ${await fetchTraeChatJwt(credential, this.product, this.fetchImpl)}`
+    headers['get-svc'] = '1'
+    headers['X-Request-Pin'] = envelope.requestPin
+    headers['X-Requested-At'] = String(envelope.requestAt)
+    return {
+      body: JSON.stringify({ model_name: modelName, message: envelope.message }),
+      headers,
     }
   }
 

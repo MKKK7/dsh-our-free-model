@@ -22,6 +22,7 @@ import {
   isTraeExpired,
   isTraeRefreshable,
   parseTraeBatchModelList,
+  parseTraeIntlModelList,
   parseTraeExchangeResponse,
   parseTraeUserInfoResponse,
   traeCredentialExpiresAtMs,
@@ -37,6 +38,7 @@ import {
   TRAE,
   TRAE_INTL,
   traeBatchModelsPathFor,
+  traeModelsBodyFor,
   traeExchangePathFor,
   traeUserInfoPathFor,
   type TraeProduct,
@@ -671,13 +673,14 @@ export class TraeAuth extends Service {
     if (credential.access_token.length === 0) return []
 
     try {
-      // ⚠️ 与 `get_detail_param`（单通道）不同，`batch_get_detail_param`
-      // 的真实用途是**一次拉取全部 function 各自一套模型目录**。
-      // 真实 CN IDE（Trae CN.exe 3.3.94）传的是全部 22 个 function，
-      // 而不是只传几个聊天通道。只传聊天通道会让非聊天通道的条目
-      // 在响应里出现位置错乱，甚至被解析器跳过。
-      // 对齐真实 IDE 的做法：全部传，解析时只消费我们关心的那几条通道。
-      const bodyObj = {
+      // ⚠️ CN 与国际版是**两套完全不同的协议**，不是「同路径换 host」。
+      //   CN：批量取 22 个 function 各自的模型目录（`function_configs`，嵌套）。
+      //   INTL：`model_list` 平铺 `model_configs`，**必须**带 `type`，
+      //        值 `llm_raw_chat`（deob ~11873300 的 `tD`），且要 `get-svc: 1` 头。
+      //        国际版的 `get_detail_param` / `batch_get_detail_param` 在
+      //        `coresg-normal.trae.ai` 上是 **404 TLB**（端点不存在）。
+      const intlBody = traeModelsBodyFor(this.product)
+      const bodyObj = intlBody ?? {
         functions: [
           'ui_builder_v2', 'solo_coder', 'chat_v3', 'solo_builder',
           'builder_v3', 'builder', 'chat', 'inline_chat', 'git_ai',
@@ -698,7 +701,10 @@ export class TraeAuth extends Service {
       const url = `${this.product.agentHost}${traeBatchModelsPathFor(this.product)}`
       const response = await this.fetchImpl(url, {
         method: 'POST',
-        headers: traeSOLOHeaders(credential, this.product, false),
+        headers: {
+          ...traeSOLOHeaders(credential, this.product, false),
+          ...(intlBody !== null ? { 'get-svc': '1' } : {}),
+        },
         body: JSON.stringify(bodyObj),
         signal: AbortSignal.timeout(TRAE_REQUEST_TIMEOUT_MS),
       })
@@ -707,7 +713,10 @@ export class TraeAuth extends Service {
         this.warn(`fetchModels: HTTP ${response.status} ${response.statusText}`)
         return []
       }
-      return parseTraeBatchModelList(await response.json() as unknown)
+      const parsed = await response.json() as unknown
+      return intlBody !== null
+        ? parseTraeIntlModelList(parsed)
+        : parseTraeBatchModelList(parsed)
     } catch (e) {
       this.warn(`fetchModels: ${e instanceof Error ? e.message : String(e)}`)
       return []

@@ -419,10 +419,17 @@ export function buildIntlDeviceInfo(
     const os = require('node:os') as typeof import('node:os')
     cpu = os.cpus()[0]?.model ?? 'unknown'
   } catch { /* ignore */ }
-  // `session.deviceId` 是 32 hex；TRAE 国际版要 19 位十进制 DeviceID。
-  // 用一个确定性派生：`BigInt('0x'+deviceId.slice(0,16)) % (1e19-1) + 1e18`。
-  const slice = session.deviceId.replace(/[^0-9a-f]/gi, '').slice(0, 16).padEnd(16, '0')
-  const deviceIdInt = ((BigInt('0x' + slice) % (9_999_999_999_999_999_999n - 1_000_000_000_000_000_000n)) + 1_000_000_000_000_000_000n).toString()
+  // `session.deviceId` 对 TRAE 国际版**已经是** 19 位十进制（由
+  // `generateTraeSessionIds` 生成），必须与登录 URL 里的 `device_id` 逐字符相同，
+  // 否则授权码对不上 → 20403 `Token device not match`。仅当它仍是 32 hex
+  // （历史凭据 / CN 会话）时才走派生兜底。
+  const rawDeviceId = session.deviceId.trim()
+  const deviceIdInt = /^\d{16,20}$/.test(rawDeviceId)
+    ? rawDeviceId
+    : (() => {
+      const slice = rawDeviceId.replace(/[^0-9a-f]/gi, '').slice(0, 16).padEnd(16, '0')
+      return ((BigInt('0x' + slice) % (9_999_999_999_999_999_999n - 1_000_000_000_000_000_000n)) + 1_000_000_000_000_000_000n).toString()
+    })()
   return {
     DeviceID: deviceIdInt,
     MachineID: session.machineId,
@@ -486,9 +493,17 @@ export function parseTraeCallbackDetailed(rawUrl: string): TraeCallbackParseResu
   // ⚠️ 这里逐个来源取第一个**非空**值，不能用 `??` 串起来：`jsonString`
   // 取不到时返回**空串**而非 undefined，空串不是 nullish，会让后续来源
   // 永远短路掉（`a ?? b ?? c` 里 a='' 就直接返回 ''）。
+  //
+  // ⚠️ 字段名：`authCodeInfo` 里实际字段是 **大写 `AuthCode`**（TRAE 真身
+  // main.log:234 抓包：`{"AuthCode":"G1uCbkcM0lZ1Oo5XoeghjMkQ1ilrAU3V3g1w3orqq6A",
+  // "ExpireAt":...,"ExpireDuration":...}`），早期实现只试小写 `code` / `authCode`
+  // → 全部 miss → 兜底 `query.get('authCodeInfo')` 返回**整个 JSON 字符串**
+  // 作为 authCode → 服务端收到 107 字符 JSON 字符串而不是 43 字符裸 code →
+  // 10101 Invalid param。**新增 `AuthCode`（大写 A）候选**。
   const authCodeCandidates: string[] = [
     query.get('code') ?? '',
     query.get('authCode') ?? '',
+    jsonString(authCodeInfo, 'AuthCode'),
     jsonString(authCodeInfo, 'code'),
     jsonString(authCodeInfo, 'authCode'),
     // authCodeInfo 为**纯 code 字符串**（非 JSON）时 parseJsonParam 解不出，
@@ -796,14 +811,44 @@ async function listenWithFallback(
  *
  * 起本地回调服务器 → 打开登录 URL → 等待回调 → ExchangeToken + GetUserInfo → 返回凭据。
  */
+/**
+ * 按产品形态生成登录会话的 `(machineId, deviceId)`。
+ *
+ * ## ⚠️ 为什么必须**同一个值**两处共用（20403 `Token device not match` 的根因）
+ *
+ * TRAE 把授权码（`AuthCode`）绑定在**登录 URL 里下发的 device 身份**上，
+ * 交换 token 时再用 `DeviceInfo` 里的同一身份去对。两者一旦不是**逐字符相同**，
+ * 服务端就报 `20403 Token device not match`。
+ *
+ * 真身（`main.log:218` + `main.log:87`）的形态是**按产品不同**的：
+ *
+ * | 产品 | machine_id | device_id |
+ * |---|---|---|
+ * | CN TRAE | 32 hex | 32 hex |
+ * | 国际版 TRAE | **64 hex** | **19 位十进制 uint64** |
+ *
+ * 早期实现两边都用 CN 的 32 hex 生成器，URL 发 32 hex、而 `DeviceInfo.DeviceID`
+ * 又从它派生 —— 于是 URL 与 body 的 device 身份永远对不上（10101 / 20403）。
+ */
+function generateTraeSessionIds(product: TraeProduct): { machineId: string; deviceId: string } {
+  if (product.pkceEnabled !== true) {
+    // CN 老协议：machine_id / device_id 都是 32 hex。
+    return { machineId: generateMachineId(), deviceId: generateDeviceId() }
+  }
+  // TRAE 国际版：machine_id 64 hex（32 字节），device_id 19 位十进制 uint64。
+  const buf = new Uint8Array(32)
+  crypto.getRandomValues(buf)
+  const machineId = Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('')
+  return { machineId, deviceId: generateTraeDeviceIdInt() }
+}
+
 export async function runTraeLoginFlow(
   options: TraeLoginFlowOptions & {
     product: TraeProduct
   },
 ): Promise<TraeLoginFlowResult> {
-  // 首先生成 machineId / deviceId
-  const machineId = generateMachineId()
-  const deviceId = generateDeviceId()
+  // 首先生成 machineId / deviceId（形态按产品分流，见 generateTraeSessionIds）
+  const { machineId, deviceId } = generateTraeSessionIds(options.product)
   const preferredPort = options.callbackPort ?? TRAE_CALLBACK_PORT
 
   // TRAE 国际版要走 PKCE：先生成 code_verifier + challenge。
@@ -827,6 +872,7 @@ export async function runTraeLoginFlow(
 
   const credential = await exchangeTraeCallback(
     callback, { machineId, deviceId }, options.product, options.fetcher,
+    undefined,
     undefined,
     codeVerifier,
   )
@@ -859,8 +905,7 @@ export async function startTraeLoginFlow(
   result: Promise<TraeLoginFlowResult>
   close: () => Promise<void>
 }> {
-  const machineId = generateMachineId()
-  const deviceId = generateDeviceId()
+  const { machineId, deviceId } = generateTraeSessionIds(options.product)
   const preferredPort = options.callbackPort ?? TRAE_CALLBACK_PORT
 
   // TRAE 国际版走 PKCE：先生成 code_verifier + challenge。
@@ -911,7 +956,7 @@ export async function startTraeLoginFlow(
       const callback = parsed.info
 
       // 异步完成剩余流程
-      exchangeTraeCallback(callback, { machineId, deviceId }, options.product, options.fetcher, undefined, codeVerifier)
+      exchangeTraeCallback(callback, { machineId, deviceId }, options.product, options.fetcher, undefined, undefined, codeVerifier)
         .then((credential) => {
           if (resultTimer) clearTimeout(resultTimer)
           const access = JSON.stringify(credential)

@@ -400,37 +400,56 @@ export function traeCheckinClaimPathFor(_product: TraeProduct): string {
   return '/trae/api/v2/ug/checkin_credits/claim'
 }
 
-export function traeChatPathFor(_product: TraeProduct): string {
-  return '/api/agent/v3/llm_utils_chat'
+export function traeChatPathFor(product: TraeProduct): string {
+  // CN 走 SOLO 的 `agent/v3/llm_utils_chat`；国际版 `agent/v3` 全部 400/404，
+  // 真实聊天端点是 IDE 内置 `ai-completion` 扩展的 `llmRawChatAPI`
+  // （deob 偏移 11372699 的 `llmRawChatRequest`）。
+  return product.id === 'trae_intl' ? '/api/ide/v1/llm_raw_chat' : '/api/agent/v3/llm_utils_chat'
 }
 
-export function traeModelsPathFor(_product: TraeProduct): string {
-  return '/api/ide/v1/get_detail_param'
+export function traeModelsPathFor(product: TraeProduct): string {
+  return product.id === 'trae_intl' ? '/api/ide/v1/model_list' : '/api/ide/v1/get_detail_param'
 }
 
-export function traeBatchModelsPathFor(_product: TraeProduct): string {
-  return '/api/ide/v1/batch_get_detail_param'
+export function traeBatchModelsPathFor(product: TraeProduct): string {
+  return product.id === 'trae_intl' ? '/api/ide/v1/model_list' : '/api/ide/v1/batch_get_detail_param'
 }
 
 /**
- * 兜底模型目录（国际版，8 条试探性 + 远端优先）。
+ * 国际版模型列表的请求体（`trae-auth.ts` 的 `fetchModels` 分派用）。
  *
- * 来源：你本机 `D:\Tools\Trae` 客户端内置 `ai-completion` 扩展的路径表里
- * `api/ide/v1/get_detail_param` 与 CN 同名同路径；远端目录是国际版的真实
- * 名单，本表只在远端整体失败时顶替。**条目按国际版 IDE 版本（3.5.87）
- * 实测可能可用**（`storeCountryCode=tw`、`userRegion=sg`），可能部分 ID
- * 在你的账号下不可用 —— 远端用 `is_custom_model`/`config_switch` 进一步
- * 过滤，本表仅作占位，避免目录全空。
+ * CN 用 `batch_get_detail_param`（POST 空体即可）；国际版该路径在
+ * `coresg-normal.trae.ai` 上是 **404 TLB**，真实端点是 `model_list`，且**必须**带
+ * `type` —— 值来自 deob 偏移 ~11873300 的 `tD`：`{type: 'llm_raw_chat'}` + `get-svc: 1`。
+ * 实测 `type` 取值扫描：`llm_raw_chat`/`chat` → 9 个模型，`builder` → 2 个，
+ * 其余（`agent`/`agentic`/`cue`/`solo`/`code_completion`/`''` …）全部 `400 {"code":4001}`。
+ */
+export function traeModelsBodyFor(product: TraeProduct): Record<string, unknown> | null {
+  return product.id === 'trae_intl' ? { type: 'llm_raw_chat' } : null
+}
+
+/**
+ * 兜底模型目录（国际版，9 条 —— **上游 `model_list` 的真实返回**，非试探）。
+ *
+ * 来源：`POST https://coresg-normal.trae.ai/api/ide/v1/model_list {"type":"llm_raw_chat"}`
+ * + `get-svc: 1`，200 响应 `{"model_configs":[…9 条…]}`，全量落盘在
+ * `D:\Work\DSH\tmp\mitm\real\model_list.json`。
+ * 每条含 `name` / `display_name` / `prompt_max_tokens` / `model_type`
+ * （`chat_model` | `reasoning_model`）/ `multimodal` / `status` / `is_preset`。
+ *
+ * ⚠️ 更正：本表此前手写的 8 条（Claude-Sonnet-4.6 / DeepSeek-V4-Flash / Kimi-K3 …）
+ * **在服务端根本不存在**，全是猜测，已按上游真值替换。
  */
 const TRAE_INTL_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
-  { id: 'Claude-Sonnet-4.6', name: 'Claude Sonnet 4.6', contextWindow: 200_000 },
-  { id: 'Claude-Opus-4.7', name: 'Claude Opus 4.7', contextWindow: 200_000 },
-  { id: 'GPT-5.4', name: 'GPT-5.4', contextWindow: 400_000 },
-  { id: 'GPT-5.3-Codex', name: 'GPT-5.3 Codex', contextWindow: 400_000 },
-  { id: 'Gemini-2.5-Flash', name: 'Gemini 2.5 Flash', contextWindow: 1_000_000 },
-  { id: 'DeepSeek-V4-Flash', name: 'DeepSeek V4 Flash', contextWindow: 200_000 },
-  { id: 'Kimi-K3', name: 'Kimi K3', contextWindow: 200_000 },
-  { id: 'GLM-5.2', name: 'GLM 5.2', contextWindow: 200_000 },
+  { id: 'gemini-2.5-pro-preview-03-25', name: 'Gemini-2.5-Pro-Preview(0506)', contextWindow: 30_000 },
+  { id: 'gemini_2.5_flash', name: 'Gemini-2.5-Flash', contextWindow: 30_000 },
+  { id: 'gpt-4.1-2025-04-14', name: 'GPT-4.1', contextWindow: 40_000 },
+  { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 40_000 },
+  { id: 'deepseek-V3-0324', name: 'DeepSeek-V3-0324', contextWindow: 40_000 },
+  { id: 'deepseek-V3', name: 'DeepSeek-V3', contextWindow: 40_000 },
+  { id: 'deepseek-R1', name: 'DeepSeek-Reasoner（R1）', contextWindow: 40_000 },
+  { id: 'glm-5.3', name: 'glm-5.3', contextWindow: 30_000 },
+  { id: 'MiniMax-M2.7', name: 'MiniMax-M2.7', contextWindow: 112_000 },
 ]
 
 /**
@@ -468,23 +487,25 @@ const TRAE_INTL_CHANNELS: readonly string[] = resolveChannelList(
  *   - 账号区域 API：`https://api-sg-central.trae.ai`（凭据 `host` 字段）
  *   - 付费/权益：`/trae/api/v1/pay/ide_user_pay_status`
  *     （CN 是 `/trae/api/v2/pay/ide_user_ent_usage`，**版本+路径都不同**）
- *   - 对话端点：客户端静态文件未直接给出，**最似然候选**
- *     `https://trae-api-sg.mchost.guru`（按 CN `trae-api-cn.mchost.guru`
- *     的命名规律 + 客户端网络白名单 `*.mchost.guru`）。**试错策略**：
- *     错了换 `https://api-sg-central.trae.ai` 或 `https://growsg-normal.trae.ai`。
+ *   - 对话端点：**`https://coresg-normal.trae.ai`** —— 实测认证 200 且
+ *     `app_versions` 回 `{"default_version":"default"}` 印证 `X-App-Version: default`
+ *     正确；`X-App-Id` 必须是 `product.json` 的 `agent.appId`
+ *     （`6eefa01c-1036-4c7e-9ca5-d891f63bfcd8`，与 CN 同值）。
+ *     ⚠️ 早先的猜测 `trae-api-sg.mchost.guru` 对 `/api/ide/v1/*` 全 404，
+ *     `bytegate-sg.byteintlapi.com` 全 404 —— 都**不是**对话 host。
  *
  * 与 `TRAE` 共用同一个 `TraeAuth` / `TraeAdapter` 类（Qoder 双版本模式）。
- * `agentHost` 用了**最似然**候选，**不抓包**，错了再换。
+ * 差异全部落在本 product 常量 + `*PathFor()` 分派上。
  */
 export const TRAE_INTL: TraeProduct = {
   id: 'trae_intl',
   displayName: 'Trae (国际版)',
-  agentHost: 'https://trae-api-sg.mchost.guru',
+  agentHost: 'https://coresg-normal.trae.ai',
   ugHost: 'https://growsg-normal.trae.ai',
   oauthHost: 'https://growsg-normal.trae.ai',
   consoleHost: 'https://www.trae.ai',
   clientId: 'ono9krqynydwx5',
-  appId: '677332',
+  appId: '6eefa01c-1036-4c7e-9ca5-d891f63bfcd8',
   ideVersion: '3.5.87',
   ideVersionCode: '20251013',
   deviceBrand: 'Apple',

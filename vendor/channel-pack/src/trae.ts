@@ -34,7 +34,7 @@
  *   大小写不敏感匹配等逻辑。
  */
 
-import { createHash } from 'node:crypto'
+import { createCipheriv, createHash, randomBytes } from 'node:crypto'
 import { jwtExpiresAtMs } from './buddy.js'
 import { TRAE_CHANNELS, type TraeProduct } from './trae-product.js'
 
@@ -315,6 +315,46 @@ export function traeCheckinHeaders(
   const sessionId = deriveSessionId(userId)
   const traceId = `00-${randomHex(16)}-01`
   const requestId = uuidV4()
+  // ⚠️ **必须按产品分流**（国际版余额/签到失败的根因）：
+  //
+  // 真身（`main.log` 国际版日志）访问
+  // `https://growsg-normal.trae.ai/trae/api/v1/pay/ide_user_pay_status`
+  // 时带的是 **`x-cloudide-token`** 头；CN 那套
+  // `Authorization: Cloud-IDE-JWT …` + `X-User-Region: CN` +
+  // `Package-Type: stable_cn` 是**中国区**专用形态，发到国际版域名上
+  // 服务端不认 → 余额查询失败。
+  //
+  // 早期实现把这两套写死成同一份，且 `trae-credits.ts` 的 postJson 还把
+  // product 整个丢掉（传 `{} as never`），导致 `product.ideVersion` 也是
+  // undefined —— 头里出现 `App-Version: undefined`。
+  const isIntl = product?.pkceEnabled === true
+  if (isIntl) {
+    return {
+      'Content-Type': 'application/json',
+      Accept: '*/*',
+      'Accept-Encoding': 'gzip, deflate',
+      'Accept-Language': 'en-US',
+      'User-Agent': product.userAgent,
+      // ⚠️ 头名是**小写** `x-cloudide-token`（真身 `getUserInfo` 请求原文）。
+      'x-cloudide-token': credential.access_token,
+      'X-Market-User-Id': marketUserId,
+      'X-User-Region': 'SG',
+      'X-Device-Id': deviceId,
+      'X-Lgw-Req-Sdk-Type': '3',
+      // 真身 `Package-Type` 是 `stable_i18n`（`notifications/count?packageType=stable_i18n`）。
+      'Package-Type': 'stable_i18n',
+      'X-Lscbd-Platform': 'windows',
+      'App-Version': product.ideVersion,
+      'X-Ide-Version': product.ideVersion,
+      'X-App-Id': product.appId,
+      'X-Tt-Trace-Id': traceId,
+      'Vscode-Sessionid': sessionId,
+      'X-Request-Id': requestId,
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'no-cors',
+      'Sec-Fetch-Site': 'none',
+    }
+  }
   return {
     'Content-Type': 'application/json',
     Accept: '*/*',
@@ -1308,6 +1348,153 @@ export function parseTraeBatchModelList(
     }
   }
   return [...byId.values()]
+}
+
+// ── 国际版：请求信封（aes-256-gcm 混淆防滥用）──
+
+/**
+ * 国际版 `llm_raw_chat` 的信封密钥（32 字节，hex 硬编码在客户端里）。
+ *
+ * 来源：`D:\Tools\Trae\resources\app\extensions\ai-completion\resource\aiserver\server.js`
+ * 反混淆后偏移 9018804 的 `masticateVegetablesToPulp`。
+ * 这是**客户端与服务端共享的固定密钥**，不是账号派生量，故所有用户一致。
+ */
+const TRAE_ENVELOPE_KEY_HEX = '6195f24ca4d430f8a4833de7db8dac37d148a084e7464a351ffa68585c16b955'
+
+/** 国际版聊天请求的信封（AAD = 时间戳、tag 拼在密文尾部、pin 走 hex）。 */
+export interface TraeEnvelope {
+  /** `base64(iv(12) ‖ ciphertext ‖ authTag(16))`。 */
+  message: string
+  /** `X-Request-Pin` 的值 —— 8 字节 pin 的 **hex**（不是 base64）。 */
+  requestPin: string
+  /** `X-Requested-At` 的值 —— unix **秒**。 */
+  requestAt: number
+}
+
+/**
+ * 把明文封进 `llm_raw_chat` 的 `message` 字段（客户端 `masticateVegetablesToPulp`）。
+ *
+ * 算法（逐行还原自 deob 偏移 9018804）：
+ * 1. `key = KEY_HEX`，`requestAt = floor(now/1000)`，`pin = randomBytes(8)`；
+ * 2. `key[0..8] ^= pin[0..8]` —— 密钥前 8 字节与 pin **逐字节异或**；
+ * 3. `iv = randomBytes(12)`，`aes-256-gcm`，**AAD = `String(requestAt)`**；
+ * 4. `message = base64(iv ‖ ct ‖ tag)`（tag 16 字节拼在尾部，不是拼在前面）；
+ * 5. `requestPin = pin.toString('hex')`。
+ *
+ * ⚠️ **每次请求必须重新封一次**：服务端记录已用 pin，重复提交同一个 pin 会得到
+ * 流内 `event: error {"code":4120}`（实测）。所以调用方要在**每次重试**时重新调用本函数。
+ *
+ * ⚠️ `requestPin` 用 hex 而非 base64 —— 早期按 base64 实现时错误码是 `4001`，
+ * 改成 hex 后变成 `4120`，说明 pin 校验已通过、失败点移到了业务层。
+ */
+export function sealTraeEnvelope(plaintext: Buffer | string): TraeEnvelope {
+  const key = Buffer.from(TRAE_ENVELOPE_KEY_HEX, 'hex')
+  const requestAt = Math.floor(Date.now() / 1000)
+  const pin = randomBytes(8)
+  for (let i = 0; i < 8; i++) key[i] ^= pin[i]!
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  cipher.setAAD(Buffer.from(String(requestAt)))
+  const ciphertext = Buffer.concat([cipher.update(typeof plaintext === 'string' ? Buffer.from(plaintext) : plaintext), cipher.final()])
+  return {
+    message: Buffer.concat([iv, ciphertext, cipher.getAuthTag()]).toString('base64'),
+    requestPin: pin.toString('hex'),
+    requestAt,
+  }
+}
+
+/**
+ * 取国际版聊天专用的临时 JWT（`Authorization: Cloud-IDE-JWT <jwt>` 用）。
+ *
+ * 端点 `POST {product.ugHost}/cloudide/api/v3/trae/GenerateTempToken`，
+ * body `{IDEVersion}`，**只**带 `x-cloudide-token`（OAuth access_token）。
+ * 响应 `{Result:{Token, ExpireDuration:10080}}`，JWT payload
+ * `{"data":{"id":"<uid>","tenant_id":"…","type":"user","user_id":"<uid>"},"iss":"trae"}`。
+ *
+ * ⚠️ 与 CN 的差别（实测 6 种认证组合）：国际版 `llm_raw_chat` 需要
+ * **同时**给 `Authorization: Cloud-IDE-JWT <该JWT>` 和 `X-Cloudide-Token: <access_token>`。
+ * 只给 access → `4120`；只给 JWT（不带 access）→ `1001`；把 `X-Cloudide-Token`
+ * 也换成 JWT → `1001`。
+ */
+export async function fetchTraeChatJwt(
+  credential: TraeCredential,
+  product: TraeProduct,
+  fetcher: typeof fetch,
+): Promise<string> {
+  const response = await fetcher(`${product.ugHost}/cloudide/api/v3/trae/GenerateTempToken`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-cloudide-token': credential.access_token,
+    },
+    body: JSON.stringify({ IDEVersion: product.ideVersion }),
+    signal: AbortSignal.timeout(TRAE_REQUEST_TIMEOUT_MS),
+  })
+  if (!response.ok) throw new LlmError(`trae: GenerateTempToken HTTP ${response.status}`, 'AUTH', { status: response.status })
+  const body = await response.json() as unknown
+  const token = readStringField((body as Record<string, unknown>).Result as Record<string, unknown> ?? {}, 'Token')
+  if (token.length === 0) throw new LlmError('trae: GenerateTempToken returned no token', 'AUTH')
+  return token
+}
+
+// ── 国际版模型列表解析 ──
+
+/**
+ * 解析国际版 `POST /api/ide/v1/model_list`（body `{"type":"llm_raw_chat"}`）。
+ *
+ * 响应形状与 CN 的 `function_configs` **完全不同**，是平铺的 `model_configs`：
+ * ```json
+ * {"model_configs":[{"name":"deepseek-V3","display_name":"DeepSeek-V3",
+ *   "prompt_max_tokens":40000,"model_type":"chat_model","multimodal":false,
+ *   "is_preset":true,"is_default":false,"status":true,"icon":{…},
+ *   "custom_config":"{…}","describe":{…},"builder":true,"is_new":true}]}
+ * ```
+ *
+ * 字段映射（均有实测依据，样本见 `D:\Work\DSH\tmp\mitm\real\model_list.json`）：
+ *   - `id` ← `name`（**发请求用的就是这个字段**，实测 `model_name: 'deepseek-V3'` 被接受）
+ *   - `name` ← `display_name`（DSH 展示名）
+ *   - `contextWindow` ← `prompt_max_tokens`
+ *   - `isCustomModel` ← `is_preset === false`（预置条目才是可直接调用的；
+ *     `client_connect: true` 的 custom_model 条目需要用户自带 key，见
+ *     {@link TraeRemoteModel.isCustomModel} 的实测记录，一律挡在目录外）
+ *   - `reasoningConfig` ← `model_type === 'reasoning_model'` 时给 `options: ['low','high']`。
+ *     `model_list` **不返回**真实档位表，`reasoning_model` 只是类型标记；
+ *     适配器据此声明档位，实测该类模型（`deepseek-R1` / `MiniMax-M2.7`）接受
+ *     `reasoning_effort`，不发不会报错。
+ *   - `function` **留空**：国际版 `llm_raw_chat` 请求体里没有 function 字段
+ *     （见 `trae-adapter.ts` 的 `send()`），通道概念在此协议里不存在。
+ */
+export function parseTraeIntlModelList(body: unknown): TraeRemoteModel[] {
+  if (typeof body !== 'object' || body === null) return []
+  const record = body as Record<string, unknown>
+  const list = record.model_configs ?? record.ModelConfigs
+  if (!Array.isArray(list)) return []
+  const out: TraeRemoteModel[] = []
+  const seen = new Set<string>()
+  for (const item of list) {
+    if (typeof item !== 'object' || item === null) continue
+    const e = item as Record<string, unknown>
+    const id = readStringField(e, 'name') || readStringField(e, 'Name')
+    if (id.length === 0 || seen.has(id)) continue
+    // `status: false` = 上游停用。
+    if (e.status === false) continue
+    const display = readStringField(e, 'display_name') || readStringField(e, 'DisplayName')
+    const maxTokens = typeof e.prompt_max_tokens === 'number' ? e.prompt_max_tokens : undefined
+    const model: TraeRemoteModel = {
+      id,
+      name: display.length > 0 ? display : id,
+      isEnabled: true,
+    }
+    if (maxTokens !== undefined && maxTokens > 0) model.contextWindow = maxTokens
+    if (e.is_preset === false || e.client_connect === true) model.isCustomModel = true
+    if (e.multimodal === true) model.multimodal = true
+    if (readStringField(e, 'model_type') === 'reasoning_model') {
+      model.reasoningConfig = { supportThinking: true, options: ['low', 'high'] }
+    }
+    seen.add(id)
+    out.push(model)
+  }
+  return out
 }
 
 /**

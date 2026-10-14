@@ -186,3 +186,109 @@ for Google sign-in.
 
 This step is intentionally not automated — `pnpm install` against a
 running DSH is a known footgun.
+
+## Trae 国际版协议实测记录（2026-10-14）
+
+抓包全部失败后（aiserver 目录 ACL 拒绝写、`NODE_OPTIONS=--require` 不被 Electron
+采纳、Chromium `--log-net-log` 传不进 NetworkService 子进程、自建 MITM 只捞到 1 条
+无关请求），改走**静态反混淆**：`D:\Tools\Trae\resources\app\extensions\ai-completion\
+resource\aiserver\server.js`（15.5 MB，obfuscator.io 风格，解码器 `_0x45c0`）。
+全表解码后协议逐项确定，全部有 deob 偏移可查。
+
+### host / appId
+
+| 项 | 值 | 来源 |
+|---|---|---|
+| agent host | `https://coresg-normal.trae.ai` | 实测认证 200 |
+| `X-App-Id` | `6eefa01c-1036-4c7e-9ca5-d891f63bfcd8` | `product.json` 的 `agent.appId`（与 CN 同值） |
+| OAuth/UG host | `https://growsg-normal.trae.ai` | 日志 |
+| login portal | `https://www.trae.ai/authorization` | 日志 |
+
+**已排除的猜测**：`trae-api-sg.mchost.guru`（对 `/api/ide/v1/*` 全 404）、
+`bytegate-sg.byteintlapi.com`（全 404 `page not found`）、
+`api-sg-central.trae.ai` / `icube-normal.trae.ai`（全 404 TLB）。
+
+### 模型目录
+
+```
+POST https://coresg-normal.trae.ai/api/ide/v1/model_list
+headers: get-svc: 1 + SOLO 头
+body:    {"type":"llm_raw_chat"}
+→ 200 {"model_configs":[…9 条…]}
+```
+
+`type` 必须给，值扫描结果：`llm_raw_chat` / `chat` → 9 条，`builder` → 2 条
+（`glm-5.3`、`MiniMax-M2.7`，带 `custom_model_id`/`ak`，需自带 key），
+其余（`agent`/`agentic`/`cue`/`solo`/`code_completion`/`''` …）全部 `400 {"code":4001}`。
+
+9 条：`gemini-2.5-pro-preview-03-25`、`gemini_2.5_flash`、`gpt-4.1-2025-04-14`、
+`gpt-4o`、`deepseek-V3-0324`、`deepseek-V3`、`deepseek-R1`、`glm-5.3`、`MiniMax-M2.7`。
+⚠️ 其中 `deepseek-R1` 在客户端 `tD` 里被**显式过滤掉**（`m.name !== 'deepseek-R1'`），
+插件沿用该过滤。
+
+另有 `POST /api/ide/v1/providers` → 27 家 BYOK provider（deepseek / anthropic /
+openrouter / volcengine / aliyuncs / bigmodel / siliconflow …，各带 `base_url`
+与 `model_detail`），是「自定义模型」的数据源。
+
+### 聊天：信封与认证
+
+`POST /api/ide/v1/llm_raw_chat`，body **只有两个字段**：
+
+```json
+{"model_name": "deepseek-V3", "message": "<base64 信封>"}
+```
+
+信封算法（`masticateVegetablesToPulp`，deob 偏移 9018804）：
+
+1. `key = 6195f24ca4d430f8a4833de7db8dac37d148a084e7464a351ffa68585c16b955`（hex 硬编码）
+2. `requestAt = floor(now/1000)`；`pin = randomBytes(8)`；`key[0..8] ^= pin[0..8]`
+3. `aes-256-gcm`，`iv = randomBytes(12)`，**AAD = `String(requestAt)`**
+4. `message = base64(iv ‖ ct ‖ authTag)`
+5. `X-Request-Pin = pin.toString('hex')`（**hex**，不是 base64）
+
+请求头 = SOLO 头 + `{get-svc: 1, X-Request-Pin, X-Requested-At}`，且
+`Authorization` 换成临时 JWT（`POST {ugHost}/cloudide/api/v3/trae/GenerateTempToken`，
+body `{IDEVersion}`，只带 `x-cloudide-token`），而 `X-Cloudide-Token` **保持**
+OAuth `access_token`。
+
+认证组合实测（6 种）：
+
+| 头 | 结果 |
+|---|---|
+| 只给 `X-Cloudide-Token: access` | `event: error {"code":4120}` |
+| 只给 `Authorization: Cloud-IDE-JWT <jwt>` | `code:1001` |
+| `Authorization` 里放 access_token | `4120` |
+| 两个头都放 JWT | `1001` |
+| **`Authorization: Cloud-IDE-JWT <jwt>` + `X-Cloudide-Token: access`** | **`4120`** |
+
+→ 认证已通过，失败在业务层。
+
+### ⛔ 当前阻塞：`4120` = 账号无 SOLO 权益
+
+`POST growsg-normal.trae.ai/trae/api/v1/pay/ide_user_pay_status` 的响应把话说死了：
+
+```json
+{"code":1001,
+ "enable_solo_builder":false,"enable_solo_coder":false,
+ "enable_solo_lite":false,"enable_solo_web":false,"enable_fission":false,
+ "is_support_commercialization":false,
+ "user_pay_identity":0,"user_pay_identity_str":"",
+ "solo_fission_expire_time":0,"solo_fission_max_usage":0}
+```
+
+`user_pay_identity: 0` + 五个 `enable_solo_*` 全 `false` —— 该账号**没有任何 SOLO
+套餐**。`model_list` 是登录即可读的目录，但 `llm_raw_chat` 需要付费权益，
+所以 9 个模型 × 3 次重试 × 6 种认证组合全部 `4120`，换哪个模型都一样。
+
+**结论**：国际版渠道的**登录 + 目录**已经可用（登录跑通、模型列表从上游实时拉取），
+**对话**要等账号本身有 SOLO 权益。这是账号状态问题，不是协议问题 —— 协议侧
+已无可再挖。
+
+### 顺带修掉的两个既有缺陷
+
+1. `trae-credits.ts` 的 `postJson` 形参表里 `host: string` 被注释吞掉了，
+   函数体却还在用 `${host}` —— 调用方仍按 7 个实参传。已补回形参。
+2. 国际版 `appId` 原先写的是 `677332`（那是 `app_id(tea)`，不是 `X-App-Id`）。
+   用错值时 `/api/ide/v1/super_completion` 回
+   `code:2001 super completion service not found: 677332`、`model_list` 回 500。
+   这条报错就是判断 appId 对错的 oracle。已改为 UUID。

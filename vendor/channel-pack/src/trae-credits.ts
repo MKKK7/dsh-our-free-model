@@ -150,12 +150,20 @@ async function postJson(
   /**
    * `host`：TRAE 签到与余额端点域名（CN `https://api.trae.cn`、INTL `https://growsg-normal.trae.ai`）。
    *
-   * ⚠️ **必须由调用方按 product 注入**：早期这里写死 `https://api.trae.cn` —— 是的，
+   * ⚠️ **必须由调用方按 product 注入**：早先这里写死 `https://api.trae.cn` —— 是的，
    * 那是「中国版」的 ugHost。国际版账号一旦发签到，就会把请求打到 CN 域名上
    * （跨站 token 不通用、必失败）。改为传参后路径仍按 `*PathFor(product)` 走，
    * host 按 product 走 —— 两边解耦后跟「同协议族共用实现、差异收敛到 product」一致。
    */
   host: string,
+  /**
+   * `product`：TRAE 同族的产品配置。**必须由调用方注入** —— 早先这里传
+   * `{} as never`，导致 `traeCheckinHeaders` 拿不到 product 就退回 CN 形态
+   * （`Authorization: Cloud-IDE-JWT` + `X-User-Region: CN`），
+   * 且 `product.ideVersion` 是 undefined → 头里出现 `App-Version: undefined`。
+   * 国际版账号因此拿不到余额（请求头与真身不符）。
+   */
+  product: TraeProduct,
 ): Promise<{ ok: true; body: Record<string, unknown>; httpStatus: number } | { ok: false; message: string; httpStatus: number }> {
   const uid = userId ?? credential.uid
   if (uid.length === 0) {
@@ -164,7 +172,7 @@ async function postJson(
   try {
     const response = await fetcher(`${host}${path}`, {
       method: 'POST',
-      headers: traeCheckinHeaders(credential, {} as never, uid) as Record<string, string>,
+      headers: traeCheckinHeaders(credential, product, uid) as Record<string, string>,
       body,
       signal: AbortSignal.timeout(TRAE_REQUEST_TIMEOUT_MS),
     })
@@ -199,7 +207,7 @@ export async function fetchTraeCheckinStatus(
   product: TraeProduct,
   fetcher: typeof fetch = fetch,
 ): Promise<CheckinStatus | null> {
-  const result = await postJson(traeCheckinStatusPathFor(product), credential, '{}', fetcher, credential.uid, product.ugHost)
+  const result = await postJson(traeCheckinStatusPathFor(product), credential, '{}', fetcher, credential.uid, product.ugHost, product)
   if (!result.ok) return null
   const body = result.body
   const code = readClaimCode(body)
@@ -248,7 +256,7 @@ export async function claimTraeDailyCheckin(
   const doClaim = async (): Promise<{ ok: boolean; body?: Record<string, unknown>; httpStatus: number; message: string; code: number }> => {
     let lastError = { ok: false, httpStatus: 0, message: '', code: 0 }
     for (let attempt = 0; attempt <= Math.max(0, retryCount); attempt++) {
-      const result = await postJson(traeCheckinClaimPathFor(product), credential, '{}', fetcher, uid, product.ugHost)
+      const result = await postJson(traeCheckinClaimPathFor(product), credential, '{}', fetcher, uid, product.ugHost, product)
       if (result.ok) {
         const c = readClaimCode(result.body)
         return { ok: true, body: result.body, httpStatus: result.httpStatus, message: '', code: c }
@@ -336,6 +344,7 @@ export async function fetchTraeCreditBalance(
     fetcher,
     credential.uid,
     product.ugHost,
+    product,
   )
   if (!result.ok) return null
   const body = result.body
@@ -393,15 +402,19 @@ export async function fetchTraeCreditBalance(
 }
 
 // ── 处理器工厂（与 `channel-pack-rpc.ts` 协作）──
+//
+// ⚠️ 这些形参**必须真的传下去**。早期实现收下 `_product` 却把 `{} as TraeProduct`
+// 塞给下游 —— 于是 header 退回 CN 形态、`App-Version: undefined`，
+// 国际版账号余额恒为 null。
 
-export function makeTraeCheckinStatusHandler(_product: TraeProduct) {
-  return async (credential: TraeCredential) => fetchTraeCheckinStatus(credential, {} as TraeProduct)
+export function makeTraeCheckinStatusHandler(product: TraeProduct) {
+  return async (credential: TraeCredential) => fetchTraeCheckinStatus(credential, product)
 }
 
-export function makeTraeClaimHandler(_product: TraeProduct) {
-  return async (credential: TraeCredential) => claimTraeDailyCheckin(credential, {} as TraeProduct)
+export function makeTraeClaimHandler(product: TraeProduct) {
+  return async (credential: TraeCredential) => claimTraeDailyCheckin(credential, product)
 }
 
-export function makeTraeBalanceHandler(_product: TraeProduct) {
-  return async (credential: TraeCredential) => fetchTraeCreditBalance(credential, {} as TraeProduct)
+export function makeTraeBalanceHandler(product: TraeProduct) {
+  return async (credential: TraeCredential) => fetchTraeCreditBalance(credential, product)
 }
