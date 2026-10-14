@@ -46,7 +46,7 @@ import {
   type TraeReasoningConfig,
   type TraeRemoteModel,
 } from './trae.js'
-import { TRAE, type TraeFallbackModel, type TraeProduct } from './trae-product.js'
+import { TRAE, traeChatPathFor, type TraeFallbackModel, type TraeProduct } from './trae-product.js'
 import { classifyTraeError, recordsTraeRateLimit, shouldRotateTraeAccount } from './trae-errors.js'
 import { normalizeHarnessMessages } from './message-shape.js'
 import { createBlankReasoningSuppressor, createReasoningLoopDetector, hasUsableToolName, isProseTruncatedByStopString, isReasoningLoopGuardEnabled, isTruncatedArguments, normalizeToolArguments, readWithIdleTimeout, reasoningLoopFailure, resolveEmptyResponseReason, resolveToolPairing, splitThinkTaggedContent, stripBareThinkCloseTagIfEnabled, stripCourseLeakFromHistoryContent, stripCourseLeakIfEnabled } from './sse.js'
@@ -1211,7 +1211,7 @@ export class TraeAdapter extends LlmAdapter {
       traeSOLOHeaders(credential, this.product, true, this.machineIdGeneration()),
     )
     try {
-      return await this.fetchImpl(`${this.product.agentHost}/api/agent/v3/llm_utils_chat`, {
+      return await this.fetchImpl(`${this.product.agentHost}${traeChatPathFor(this.product)}`, {
         method: 'POST',
         headers,
         body,

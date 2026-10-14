@@ -38,14 +38,16 @@
  */
 
 import {
-  TRAE_CHECKIN_CLAIM_PATH,
-  TRAE_CHECKIN_STATUS_PATH,
-  TRAE_ENT_USAGE_PATH,
   TRAE_REQUEST_TIMEOUT_MS,
   traeCheckinHeaders,
   type TraeCredential,
 } from './trae.js'
-import type { TraeProduct } from './trae-product.js'
+import {
+  traeCheckinClaimPathFor,
+  traeCheckinStatusPathFor,
+  traeEntUsagePathFor,
+  type TraeProduct,
+} from './trae-product.js'
 import type { CheckinStatus, ClaimOutcome, CreditBalance, CreditPackage } from './credits.js'
 
 // ── 错误分类与冷却时间（对齐 trae-mate `cooldown.rs`）──
@@ -145,13 +147,22 @@ async function postJson(
   body: string,
   fetcher: typeof fetch,
   userId: string | undefined,
+  /**
+   * `host`：TRAE 签到与余额端点域名（CN `https://api.trae.cn`、INTL `https://growsg-normal.trae.ai`）。
+   *
+   * ⚠️ **必须由调用方按 product 注入**：早期这里写死 `https://api.trae.cn` —— 是的，
+   * 那是「中国版」的 ugHost。国际版账号一旦发签到，就会把请求打到 CN 域名上
+   * （跨站 token 不通用、必失败）。改为传参后路径仍按 `*PathFor(product)` 走，
+   * host 按 product 走 —— 两边解耦后跟「同协议族共用实现、差异收敛到 product」一致。
+   */
+  host: string,
 ): Promise<{ ok: true; body: Record<string, unknown>; httpStatus: number } | { ok: false; message: string; httpStatus: number }> {
   const uid = userId ?? credential.uid
   if (uid.length === 0) {
     return { ok: false, message: '缺少 user_id，无法构造设备身份', httpStatus: 0 }
   }
   try {
-    const response = await fetcher(`https://api.trae.cn${path}`, {
+    const response = await fetcher(`${host}${path}`, {
       method: 'POST',
       headers: traeCheckinHeaders(credential, {} as never, uid) as Record<string, string>,
       body,
@@ -185,10 +196,10 @@ async function postJson(
  */
 export async function fetchTraeCheckinStatus(
   credential: TraeCredential,
-  _product: TraeProduct,
+  product: TraeProduct,
   fetcher: typeof fetch = fetch,
 ): Promise<CheckinStatus | null> {
-  const result = await postJson(TRAE_CHECKIN_STATUS_PATH, credential, '{}', fetcher, credential.uid)
+  const result = await postJson(traeCheckinStatusPathFor(product), credential, '{}', fetcher, credential.uid, product.ugHost)
   if (!result.ok) return null
   const body = result.body
   const code = readClaimCode(body)
@@ -237,7 +248,7 @@ export async function claimTraeDailyCheckin(
   const doClaim = async (): Promise<{ ok: boolean; body?: Record<string, unknown>; httpStatus: number; message: string; code: number }> => {
     let lastError = { ok: false, httpStatus: 0, message: '', code: 0 }
     for (let attempt = 0; attempt <= Math.max(0, retryCount); attempt++) {
-      const result = await postJson(TRAE_CHECKIN_CLAIM_PATH, credential, '{}', fetcher, uid)
+      const result = await postJson(traeCheckinClaimPathFor(product), credential, '{}', fetcher, uid, product.ugHost)
       if (result.ok) {
         const c = readClaimCode(result.body)
         return { ok: true, body: result.body, httpStatus: result.httpStatus, message: '', code: c }
@@ -315,15 +326,16 @@ export async function claimTraeDailyCheckin(
  */
 export async function fetchTraeCreditBalance(
   credential: TraeCredential,
-  _product: TraeProduct,
+  product: TraeProduct,
   fetcher: typeof fetch = fetch,
 ): Promise<CreditBalance | null> {
   const result = await postJson(
-    TRAE_ENT_USAGE_PATH,
+    traeEntUsagePathFor(product),
     credential,
     JSON.stringify({ require_usage: true, req_source: 2 }),
     fetcher,
     credential.uid,
+    product.ugHost,
   )
   if (!result.ok) return null
   const body = result.body

@@ -43,6 +43,7 @@ import { lobsteraiProductById } from './lobsterai-product.js'
 import { qoderProductById } from './qoder-product.js'
 import { clineProductById } from './cline-product.js'
 import { zcodeProductById } from './zcode-product.js'
+import { traeProductById } from './trae-product.js'
 import { GeminiAdapter } from './gemini-adapter.js'
 import { GEMINI, GEMINI_DEFAULT_PROJECT, GEMINI_SESSION_LANE_SMOKE } from './gemini.js'
 import type { BuddyCredential } from './buddy.js'
@@ -63,12 +64,12 @@ import type {
 } from './types.js'
 
 /**
- * TRAE 的 provider id。
+ * TRAE 同族 provider id（中国版 / 国际版）。
  *
- * 单独提为常量而不是内联字面量：本文件已有两处「新增 provider 漏加分派」的
+ * 单独提为常量集合而不是内联字面量：本文件已有两处「新增 provider 漏加分派」的
  * 缺陷（workbuddy、trae），把它写成具名常量便于检索与统一改动。
  */
-const TRAE_PROVIDER_ID = 'trae'
+const TRAE_PROVIDER_IDS: ReadonlySet<string> = new Set(['trae', 'trae_intl'])
 
 /**
  * 探测可能涉及的凭据联合类型。
@@ -305,13 +306,17 @@ async function probeWithAdapter(
       refresh: async () => {},
       product: zcodeProduct,
     })
-  } else if (entry.provider === TRAE_PROVIDER_ID) {
-    // TRAE 只有一个产品（`TRAE` 常量），没有 productById 式的查表，
-    // 故直接按 provider id 判定。不传 product → TraeAdapter 内部默认用 TRAE。
+  } else if (TRAE_PROVIDER_IDS.has(entry.provider)) {
+    // TRAE 同族（中国版 / 国际版）共用同一个 `TraeAdapter` 类 —— 与
+    // `qoder / qodercn` 同型：差异全在 product 配置里。按 provider 拿正确
+    // 的 product 注入，否则国际版账号会被错发到中国版域名（host/ClientID
+    // 都来自 product，混用必然失败）。
+    const product = traeProductById(entry.provider)
     adapter = new TraeAdapter({
       credentialRef: ref,
       resolveCredential: async () => credential as TraeCredential,
       refresh: async () => {},
+      product,
     })
   } else if (entry.provider === GEMINI.id) {
     // Gemini（Cloud Code Assist）→ GeminiAdapter。

@@ -3561,6 +3561,7 @@ window.__ModuleLoader__.load({
       { id: 'qoder', name: 'Qoder', org: '阿里系', accent: '#615CED', note: '每日 100 Credits，加密推理端点', login: 'browser' },
       { id: 'qodercn', name: 'Qoder 中国版', org: '阿里系', accent: '#7A6CF0', note: '中国版端点与模型池', login: 'browser' },
       { id: 'trae', name: 'TRAE', org: '字节', accent: '#00BFA6', note: '手机号登录', login: 'browser' },
+      { id: 'trae_intl', name: 'TRAE (国际版)', org: '字节 · trae.ai', accent: '#0CC4A0', note: 'Google 账号登录（trae.ai 独立额度）', login: 'browser' },
       { id: 'cline', name: 'Cline', org: 'Cline', accent: '#5B5BD6', note: 'Cline 账号免费额度', login: 'browser' },
       { id: 'loomy', name: 'Loomy', org: '讯飞', accent: '#2F6BFF', note: '微信扫码，或短信验证码备用', login: 'browser+sms' },
       { id: 'raccoon', name: 'Raccoon', org: '商汤', accent: '#00A6A6', note: '手机号登录', login: 'browser' },
@@ -3578,6 +3579,10 @@ window.__ModuleLoader__.load({
       qoder: { claim: true },
       qodercn: { claim: true },
       trae: { claim: true },
+      // TRAE **国际版**同款签到（与 `trae` 共用 TraeAuth，差异在 product）。
+      // 不写 `{ claim: true }` 面板会**不渲染**「一键领取积分」按钮 —— 国际版
+      // 账号就会被漏发签到（同 Qoder / QoderCN 同款坑）。
+      trae_intl: { claim: true },
       cline: { unit: 'dollars' },
       loomy: { claim: true },
       raccoon: {},

@@ -4,6 +4,11 @@ dist/
 *.tgz
 .DS_Store
 Thumbs.db
+pnpm-lock.yaml
+pnpm-workspace.yaml
+packages/standalone/pnpm-lock.yaml
+packages/standalone/pnpm-workspace.yaml
+pre-fork-anchors/
 
 # Local verification scratch: isolated DSH_HOME, app output, profile backups.
 .verify/

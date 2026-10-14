@@ -50,7 +50,7 @@ export interface TraeFallbackModel {
  */
 export interface TraeProduct {
   /** provider 标识：注册到 `ctx.llm` 的路由名，也是账号列表的 provider 字段值。 */
-  id: 'trae'
+  id: 'trae' | 'trae_intl'
   /** 设置页 / 模型选择器展示名。 */
   displayName: string
   /** 上游 API 基址（Agent 服务：对话 + 模型列表）。 */
@@ -334,4 +334,165 @@ export const TRAE: TraeProduct = {
   defaultCredentialRef: 'TRAE_ACCESS_TOKEN',
   userAgent: 'Trae/0.1.52',
   fallbackModels: TRAE_FALLBACK_MODELS,
+}
+
+/**
+ * 路径选择 —— **按 product 选**。
+ *
+ * CN 路径来自 `trae2api` Go 逆向；国际版路径来自你本机 `D:\Tools\Trae`
+ * 客户端 2026-10-13 启动日志（main.log 命中 `ExchangeToken` / `GetUserInfo`
+ * / `pay/ide_user_pay_status` 的完整 URL）。
+ *
+ * - ExchangeToken：国际版 `/trae/api/v3/oauth/ExchangeToken`、CN
+ *   `/cloudide/api/v3/trae/oauth/ExchangeToken`（前缀不同，国际版带 PKCE）。
+ * - GetUserInfo：国际版与 CN 路径**完全相同**，换 host 即可（路径函数
+ *   仍按 product 分流，避免日后某天再次分叉）。
+ * - Pay/entitlement：国际版 v1、CN v2 + 路径名 `ide_user_pay_status` vs
+ *   `ide_user_ent_usage`（版本与路径都不同）。
+ * - chat/models/checkin：**路径两边同名**，按 product 选 host 即可，路径
+ *   函数统一返回 CN 字面值。
+ */
+export function traeExchangePathFor(product: TraeProduct): string {
+  return product.id === 'trae_intl'
+    ? '/trae/api/v3/oauth/ExchangeToken'
+    : '/cloudide/api/v3/trae/oauth/ExchangeToken'
+}
+
+export function traeUserInfoPathFor(_product: TraeProduct): string {
+  // 两版同路径；保留 product 形参以备将来分叉。
+  return '/cloudide/api/v3/trae/GetUserInfo'
+}
+
+export function traeEntUsagePathFor(product: TraeProduct): string {
+  return product.id === 'trae_intl'
+    ? '/trae/api/v1/pay/ide_user_pay_status'
+    : '/trae/api/v2/pay/ide_user_ent_usage'
+}
+
+export function traeCheckinStatusPathFor(_product: TraeProduct): string {
+  return '/trae/api/v2/ug/checkin_credits/status'
+}
+
+export function traeCheckinClaimPathFor(_product: TraeProduct): string {
+  return '/trae/api/v2/ug/checkin_credits/claim'
+}
+
+export function traeChatPathFor(_product: TraeProduct): string {
+  return '/api/agent/v3/llm_utils_chat'
+}
+
+export function traeModelsPathFor(_product: TraeProduct): string {
+  return '/api/ide/v1/get_detail_param'
+}
+
+export function traeBatchModelsPathFor(_product: TraeProduct): string {
+  return '/api/ide/v1/batch_get_detail_param'
+}
+
+/**
+ * 兜底模型目录（国际版，8 条试探性 + 远端优先）。
+ *
+ * 来源：你本机 `D:\Tools\Trae` 客户端内置 `ai-completion` 扩展的路径表里
+ * `api/ide/v1/get_detail_param` 与 CN 同名同路径；远端目录是国际版的真实
+ * 名单，本表只在远端整体失败时顶替。**条目按国际版 IDE 版本（3.5.87）
+ * 实测可能可用**（`storeCountryCode=tw`、`userRegion=sg`），可能部分 ID
+ * 在你的账号下不可用 —— 远端用 `is_custom_model`/`config_switch` 进一步
+ * 过滤，本表仅作占位，避免目录全空。
+ */
+const TRAE_INTL_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
+  { id: 'Claude-Sonnet-4.6', name: 'Claude Sonnet 4.6', contextWindow: 200_000 },
+  { id: 'Claude-Opus-4.7', name: 'Claude Opus 4.7', contextWindow: 200_000 },
+  { id: 'GPT-5.4', name: 'GPT-5.4', contextWindow: 400_000 },
+  { id: 'GPT-5.3-Codex', name: 'GPT-5.3 Codex', contextWindow: 400_000 },
+  { id: 'Gemini-2.5-Flash', name: 'Gemini 2.5 Flash', contextWindow: 1_000_000 },
+  { id: 'DeepSeek-V4-Flash', name: 'DeepSeek V4 Flash', contextWindow: 200_000 },
+  { id: 'Kimi-K3', name: 'Kimi K3', contextWindow: 200_000 },
+  { id: 'GLM-5.2', name: 'GLM 5.2', contextWindow: 200_000 },
+]
+
+/**
+ * 国际版通道白名单 —— **沿用 CN 白名单**。
+ *
+ * 国际版客户端在 `out/main.js` 的网络白名单里同样允许 `*.mchost.guru`
+ * （CN 走 `trae-api-cn.mchost.guru`，国际版按命名规律是 `trae-api-sg.mchost.guru`），
+ * 路径 `api/agent/v3/llm_utils_chat` 未在国际客户端静态文件里出现，但
+ * `get_detail_param` 同名 → 大概率同一上游族。**先用 CN 的 15 个通道**，
+ * 国际版实际可调用的子集以远端 `get_detail_param` 的 `is_custom_model`
+ * 过滤为准。错配会在远端返回 `code=4023 the model is unknown` /
+ * `4001 param is invalid`，届时再收敛。
+ *
+ * 同样可用 `DSH_TRAE_CHANNELS` 覆盖。
+ */
+const TRAE_INTL_CHANNELS: readonly string[] = resolveChannelList(
+  process.env.DSH_TRAE_CHANNELS,
+)
+
+/**
+ * TRAE 国际版 provider 配置。
+ *
+ * 数据来源：你本机 `D:\Tools\Trae` 客户端 2026-10-13 启动日志：
+ *   - ClientID：`ono9krqynydwx5`（CN 是 `en1oxy7wnw8j9n`）
+ *   - app_id (tea)：`677332`
+ *   - IDEVersion：`3.5.87`、`packageType=stable_i18n`
+ *   - plugin_version：`2.3.68993`
+ *   - 区域：`userRegion=sg`、`StoreCountry=tw`、`Region=Singapore-Central`
+ *   - OAuth 登录门户：`https://www.trae.ai/authorization`
+ *   - ExchangeToken：`POST https://growsg-normal.trae.ai/trae/api/v3/oauth/ExchangeToken`
+ *     （CN 是 `/cloudide/api/v3/trae/oauth/ExchangeToken`，**前缀不同**，
+ *      且国际版带 PKCE `CodeVerifier`）
+ *   - GetUserInfo：`POST https://growsg-normal.trae.ai/cloudide/api/v3/trae/GetUserInfo`
+ *     （CN 同路径，换 host）
+ *   - 账号区域 API：`https://api-sg-central.trae.ai`（凭据 `host` 字段）
+ *   - 付费/权益：`/trae/api/v1/pay/ide_user_pay_status`
+ *     （CN 是 `/trae/api/v2/pay/ide_user_ent_usage`，**版本+路径都不同**）
+ *   - 对话端点：客户端静态文件未直接给出，**最似然候选**
+ *     `https://trae-api-sg.mchost.guru`（按 CN `trae-api-cn.mchost.guru`
+ *     的命名规律 + 客户端网络白名单 `*.mchost.guru`）。**试错策略**：
+ *     错了换 `https://api-sg-central.trae.ai` 或 `https://growsg-normal.trae.ai`。
+ *
+ * 与 `TRAE` 共用同一个 `TraeAuth` / `TraeAdapter` 类（Qoder 双版本模式）。
+ * `agentHost` 用了**最似然**候选，**不抓包**，错了再换。
+ */
+export const TRAE_INTL: TraeProduct = {
+  id: 'trae_intl',
+  displayName: 'Trae (国际版)',
+  agentHost: 'https://trae-api-sg.mchost.guru',
+  ugHost: 'https://growsg-normal.trae.ai',
+  oauthHost: 'https://growsg-normal.trae.ai',
+  consoleHost: 'https://www.trae.ai',
+  clientId: 'ono9krqynydwx5',
+  appId: '677332',
+  ideVersion: '3.5.87',
+  ideVersionCode: '20251013',
+  deviceBrand: 'Apple',
+  osVersion: 'macOS 15.7.4',
+  function: 'solo_agent',
+  channels: TRAE_INTL_CHANNELS,
+  fallbackMaxOutputTokens: 32_000,
+  maxMode: resolveMaxModeFlag(process.env.DSH_TRAE_MAX_MODE),
+  maxModeModels: resolveMaxModeModels(process.env.DSH_TRAE_MAX_MODELS),
+  hideInternalModels: isTruthyFlag(process.env.DSH_TRAE_HIDE_INTERNAL),
+  pluginVersion: '2.3.68993',
+  defaultCredentialRef: 'TRAE_INTL_ACCESS_TOKEN',
+  userAgent: 'Trae/3.5.87 (stable_i18n; sg)',
+  fallbackModels: TRAE_INTL_FALLBACK_MODELS,
+}
+
+/**
+ * `provider id` → TRAE 同族 `TraeProduct`。
+ *
+ * 形态与 `qoderProductById` / `clineProductById` / `productById` 完全一致：
+ * 未知 id 抛 `Error`，迫使调用方在「分派表漏接」时**立即**崩而不是继续
+ * 拿 fallback（与 account-probe.ts 那条「TRAE_PROVIDER_ID 漏加就交给
+ * 华为云 HMAC 签名发请求」的真实缺陷同因）。
+ */
+export function traeProductById(id: string): TraeProduct {
+  switch (id) {
+    case TRAE.id:
+      return TRAE
+    case TRAE_INTL.id:
+      return TRAE_INTL
+    default:
+      throw new Error(`Unknown Trae product: ${id}`)
+  }
 }

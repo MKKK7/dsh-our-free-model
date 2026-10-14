@@ -341,7 +341,7 @@ class MemoryStore implements ChannelPackStore {
  *
  * 依据 `src/product.ts` 与各 `*-product.ts` 的 `id` 字段：
  * `codearts` / `buddy` / `workbuddy` / `lobsterai` / `qoder` / `qodercn`
- * / `trae` / `cline` / `loomy` / `raccoon` / `minimax` / `zcode`
+ * / `trae` / `trae_intl` / `cline` / `loomy` / `raccoon` / `minimax` / `zcode`
  * / `opencode` / `gemini`。
  */
 const REF_PREFIX_TO_PROVIDER: ReadonlyArray<readonly [string, string]> = [
@@ -352,6 +352,11 @@ const REF_PREFIX_TO_PROVIDER: ReadonlyArray<readonly [string, string]> = [
   ['QODER', 'qoder'],
   ['QODERCN', 'qodercn'],
   ['TRAE', 'trae'],
+  // TRAE **国际版**单凭据 ref 前缀是 `TRAE_INTL_ACCESS_TOKEN`，与 QODERCN
+  // 同源（去下划线归并到「大写连续」段，便于派生回 `provider id`）。
+  // 不加这一行，账号池会**认不出**国际版账号的 credentialRef —— 走单凭据
+  // 恢复路径时直接落空。
+  ['TRAEINTL', 'trae_intl'],
   ['CLINE', 'cline'],
   ['LOOMY', 'loomy'],
   ['RACCOON', 'raccoon'],

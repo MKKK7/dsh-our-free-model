@@ -17,10 +17,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import {
-  TRAE_BATCH_MODELS_PATH,
-  TRAE_EXCHANGE_PATH,
   TRAE_REQUEST_TIMEOUT_MS,
-  TRAE_USER_INFO_PATH,
   applyTraeRefresh,
   isTraeExpired,
   isTraeRefreshable,
@@ -36,7 +33,14 @@ import {
   type TraeRemoteModel,
 } from './trae.js'
 import { jwtExpiresAtMs } from './buddy.js'
-import { TRAE, type TraeProduct } from './trae-product.js'
+import {
+  TRAE,
+  TRAE_INTL,
+  traeBatchModelsPathFor,
+  traeExchangePathFor,
+  traeUserInfoPathFor,
+  type TraeProduct,
+} from './trae-product.js'
 import {
   buildTraeLoginURL,
   exchangeTraeCallback,
@@ -385,7 +389,7 @@ export class TraeAuth extends Service {
     }
     let response: Response
     try {
-      response = await this.fetchImpl(`${host}${TRAE_EXCHANGE_PATH}`, {
+      response = await this.fetchImpl(`${host}${traeExchangePathFor(this.product)}`, {
         method: 'POST',
         headers: traeOAuthHeaders(this.product),
         body: JSON.stringify(exchangeBody),
@@ -573,7 +577,7 @@ export class TraeAuth extends Service {
       const host = credential.api_host ?? this.product.oauthHost
       const headers = traeOAuthHeaders(this.product)
       headers['X-Cloudide-Token'] = credential.access_token
-      const response = await this.fetchImpl(`${host}${TRAE_USER_INFO_PATH}`, {
+      const response = await this.fetchImpl(`${host}${traeUserInfoPathFor(this.product)}`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ ReqSource: 'IDE', IDEVersion: this.product.ideVersion }),
@@ -691,7 +695,7 @@ export class TraeAuth extends Service {
         ab_autotest_advanced_mode: 0,
         show_custom_model: true,
       }
-      const url = `${this.product.agentHost}${TRAE_BATCH_MODELS_PATH}`
+      const url = `${this.product.agentHost}${traeBatchModelsPathFor(this.product)}`
       const response = await this.fetchImpl(url, {
         method: 'POST',
         headers: traeSOLOHeaders(credential, this.product, false),

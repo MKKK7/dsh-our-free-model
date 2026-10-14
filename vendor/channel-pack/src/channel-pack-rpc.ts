@@ -65,7 +65,7 @@ import { fetchGeminiCreditBalance } from './gemini-credits.js'
 import { LOOMY_TASK_POINTS, LOOMY_TASK_TITLES } from './loomy-onboarding.js'
 import { LOBSTERAI } from './lobsterai-product.js'
 import { QODER, QODER_CN, type QoderProduct } from './qoder-product.js'
-import { TRAE } from './trae-product.js'
+import { TRAE, TRAE_INTL, type TraeProduct } from './trae-product.js'
 import { CLINE } from './cline-product.js'
 import {
   isLobsteraiRefreshable,
@@ -858,6 +858,8 @@ export function registerChannelPackRpc(
   /** Qoder **中国版**实例（与 `qoder` 同协议、不同 product；RPC 分支按注册表分派）。 */
   qoderCn: QoderAuth,
   trae: TraeAuth,
+  /** TRAE **国际版**实例（与 `trae` 同 TraeAuth / TraeAdapter、不同 product；RPC 按注册表分派）。 */
+  traeIntl: TraeAuth,
   cline: ClineAuth,
   loomy: LoomyAuth,
   raccoon: RaccoonAuth,
@@ -886,7 +888,7 @@ export function registerChannelPackRpc(
   ctx.inject(['connection'], (connectionCtx) => {
     registerChannelPackEndpoints(
       connectionCtx as Context, pool, codearts, buddy, workbuddy, lobsterai,
-      qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config,
+      qoder, qoderCn, trae, traeIntl, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config,
     )
   })
 }
@@ -974,6 +976,8 @@ function registerChannelPackEndpoints(
   qoder: QoderAuth,
   qoderCn: QoderAuth,
   trae: TraeAuth,
+  /** TRAE **国际版**实例（与 `trae` 同协议、不同 product；RPC 分支按注册表分派）。 */
+  traeIntl: TraeAuth,
   cline: ClineAuth,
   loomy: LoomyAuth,
   raccoon: RaccoonAuth,
@@ -1021,6 +1025,43 @@ function registerChannelPackEndpoints(
   const requireQoderFamily = (provider: string): QoderFamilyMember => {
     const member = qoderFamily.find((item) => item.product.id === provider)
     if (member === undefined) throw new Error(`Unknown Qoder family provider: ${provider}`)
+    return member
+  }
+
+  /**
+   * TRAE **同协议族**成员：中国版（cn.trae）与国际版（trae.ai）共用同一组
+   * RPC 实现，只换 `product` 与 `auth` 实例。
+   *
+   * 路径差异（host 已由 `product.{agentHost,oauthHost,...}` 承载，故这里**不需要**
+   * 给每个 member 写路径表）已收敛到 `trae-product.ts` 的 `*PathFor(product)` helpers：
+   *
+   * - ExchangeToken：CN `/cloudide/api/v3/trae/oauth/ExchangeToken`、
+   *   INTL `/trae/api/v3/oauth/ExchangeToken`（前缀不同，INTL 还带 PKCE）
+   * - GetUserInfo：两边路径同
+   * - Pay/entitlement：CN `/trae/api/v2/pay/ide_user_ent_usage`、
+   *   INTL `/trae/api/v1/pay/ide_user_pay_status`（v1 vs v2 路径名都不同）
+   * - 签到 / chat / models：**路径两边同名**，按 product 选 host 即可
+   *
+   * ⚠️ 用途与 Qoder 同族**完全平行**：登录 / 单账号续期 / 余额 / 领取四处
+   * 共享同一份 `{ product, auth }` 表。漏接任何一处都意味着国际版账号
+   * 走不通那条 RPC（早期 workbuddy 上踩过同类坑），故走注册表而不是平行的
+   * `|| provider === ...` 串。
+   */
+  interface TraeFamilyMember {
+    readonly product: TraeProduct
+    readonly auth: TraeAuth
+  }
+  const traeFamily: readonly TraeFamilyMember[] = [
+    { product: TRAE, auth: trae },
+    { product: TRAE_INTL, auth: traeIntl },
+  ]
+  /** 该 provider 是否属于 TRAE 同族（中国版或国际版）。 */
+  const isTraeFamily = (provider: string): boolean =>
+    traeFamily.some((member) => member.product.id === provider)
+  /** 取同族成员；不存在时抛错（调用方必须先用 `isTraeFamily()` 判定）。 */
+  const requireTraeFamily = (provider: string): TraeFamilyMember => {
+    const member = traeFamily.find((item) => item.product.id === provider)
+    if (member === undefined) throw new Error(`Unknown Trae family provider: ${provider}`)
     return member
   }
 
@@ -1552,14 +1593,18 @@ function registerChannelPackEndpoints(
             void pool.removeAccount(id).catch(() => {})
           })
           return { ok: true, value: { accountId: id, loginUrl: started.loginUrl } }
-        } else if (provider === TRAE.id) {
-          // TRAE 回调式登录 + 两步式返回（与 LobsterAI / codearts 同因）。
-          const started = await trae.startLogin({ refName })
+        } else if (isTraeFamily(provider)) {
+          // TRAE 同族（中国版 / 国际版）回调式登录 + 两步式返回
+          // （与 LobsterAI / codearts 同因）。分支内一律用 `product` / `auth`，
+          // **不要**出现 `TRAE` 字面量 —— 否则国际版会拿中国版的域名与
+          // ClientID 发请求。
+          const { product, auth } = requireTraeFamily(provider)
+          const started = await auth.startLogin({ refName })
           // 先登记启用的占位条目（无凭据），使前端 login.poll 能立即看到该账号；
           // 登录成功后再回填昵称/有效期等真实字段。
           await pool.addAccount({
             id,
-            provider: TRAE.id,
+            provider: product.id,
             nickname: id,
             enabled: true,
             credentialRef: refName,
@@ -1577,7 +1622,7 @@ function registerChannelPackEndpoints(
               refreshable: credential !== undefined && isTraeRefreshable(credential),
             })
           }).catch((error: unknown) => {
-            ctx.logger.warn(`[channel-pack] background ${TRAE.id} login failed for ${id}: ${String(error)}`)
+            ctx.logger.warn(`[channel-pack] background ${product.id} login failed for ${id}: ${String(error)}`)
             // 登录失败：移除占位条目，避免留下无凭据的幽灵账号
             void pool.removeAccount(id).catch(() => {})
           })
@@ -2045,7 +2090,13 @@ function registerChannelPackEndpoints(
               await requireQoderFamily(entry.provider).auth.refreshAccountCredential(entry.credentialRef, pool, entry.id)
               break
             case TRAE.id:
-              await trae.refreshAccountCredential(entry.credentialRef, pool, entry.id)
+            case TRAE_INTL.id:
+              // 同协议族：按 provider 找到对应实例。
+              // ⚠️ 只刷传入的这个 ref，不碰默认单凭据 ref（历史缺陷同因）。
+              // ⚠️ **不要**图省事写 `trae.refreshAccountCredential(...)` ——
+              // 那会让国际版账号的续期去刷中国版的凭据（两站 token 不通用，
+              // 国际版永远续不动而中国版被无谓刷一次）。
+              await requireTraeFamily(entry.provider).auth.refreshAccountCredential(entry.credentialRef, pool, entry.id)
               break
             case CLINE.id:
               await cline.refreshAccountCredential(entry.credentialRef, pool, entry.id)
@@ -2581,9 +2632,10 @@ function registerChannelPackEndpoints(
             } satisfies RpcCreditsStatusResponse,
           }
         }
-        if (req.provider === TRAE.id) {
-          // TRAE 有签到状态端点，但需要发起 Ug 请求获取（见 claim 内部的多步流程）。
-          // 与 LobsterAI/CodeArts 一样如实返回 null，由 claimAll 自行处理预检。
+        if (isTraeFamily(req.provider)) {
+          // TRAE 同族（中国版 / 国际版）有签到状态端点，但需要发起 Ug 请求获取
+          // （见 claim 内部的多步流程）。与 LobsterAI/CodeArts 一样如实返回 null，
+          // 由 claimAll 自行处理预检。
           const accounts = await pool.listAccounts(req.provider)
           return {
             ok: true,
@@ -2694,7 +2746,10 @@ function registerChannelPackEndpoints(
           })
           return { ok: true, value: value satisfies RpcCreditsClaimAllResponse }
         }
-        if (req.provider === TRAE.id) {
+        if (isTraeFamily(req.provider)) {
+          // 同族入口：按 provider 找到对应 product（路径差异全在 *PathFor 里，
+          // 选 account pool 时已是按 product.id 隔离的，签到/续期互不干扰）。
+          const { product } = requireTraeFamily(req.provider)
           const value = await collectClaimResults<TraeCredential, undefined>(accounts, undefined, {
             resolve: (ref) => ctx.credentials.resolve(ref),
             // ⚠️ **必须开启状态预检**（`precheckStatus` 默认为 true，不要传 false）。
@@ -2706,11 +2761,11 @@ function registerChannelPackEndpoints(
             // 被报成「领取成功」（用户报障：显示成功但 +0 积分）。
             // 判据只能是 status 端点的 `checked_in`。
             fetchStatus: (credential) =>
-              fetchTraeCheckinStatus(credential as TraeCredential, TRAE, fetch),
+              fetchTraeCheckinStatus(credential as TraeCredential, product, fetch),
             claim: (credential, _product, entry) =>
               claimTraeDailyCheckin(
                 credential as TraeCredential,
-                TRAE,
+                product,
                 fetch,
                 pool.traeCheckinDeviceGenerationFor(entry.id),
                 (next) => pool.updateTraeCheckinDeviceGeneration(entry.id, next),
@@ -3051,10 +3106,13 @@ function registerChannelPackEndpoints(
           })
           return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
         }
-        if (req.provider === TRAE.id) {
-          const values = await collectCreditBalances(accounts, TRAE, {
+        if (isTraeFamily(req.provider)) {
+          // 同族入口：按 provider 找 product。`accounts` 已是 `pool.listAccounts(provider)`
+          // 隔离过的，国际/中国两版的账号互不混。
+          const { product } = requireTraeFamily(req.provider)
+          const values = await collectCreditBalances(accounts, product, {
             resolve: (ref) => ctx.credentials.resolve(ref),
-            fetchBalance: (credential, product) => fetchTraeCreditBalance(credential as TraeCredential, product),
+            fetchBalance: (credential, prod) => fetchTraeCreditBalance(credential as TraeCredential, prod),
             warn: (msg) => ctx.logger?.warn?.(msg),
           })
           // ⚠️ TRAE 也回传窗口天数：它的资源包现在带 `deductionEndTime`

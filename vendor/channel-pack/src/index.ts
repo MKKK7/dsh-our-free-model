@@ -43,7 +43,7 @@ import { buddyExpiringWindowDays } from './buddy-balance-rank.js'
 import { BuddyBalanceSelector, pickBuddyAccount } from './buddy-balance-selector.js'
 import { LOBSTERAI } from './lobsterai-product.js'
 import { QODER, QODER_CN } from './qoder-product.js'
-import { TRAE } from './trae-product.js'
+import { TRAE, TRAE_INTL } from './trae-product.js'
 import { CLINE } from './cline-product.js'
 import { configureDeadModelStore, withDeadModelPruning } from './dead-model-store.js'
 import type { CodeArtsCredential, BuddyCredential } from './types.js'
@@ -288,7 +288,8 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
   // 在模型设置页上已无消费者（详见该函数头的说明）。
   registerProviderSettings(
     ctx, 'llm-buddy', 'llm-workbuddy', 'llm-codearts', 'llm-lobsterai',
-    'llm-qoder', 'llm-qodercn', 'llm-trae', 'llm-cline', 'llm-loomy', 'llm-raccoon',
+    'llm-qoder', 'llm-qodercn', 'llm-trae', 'llm-trae-intl',
+    'llm-cline', 'llm-loomy', 'llm-raccoon',
     'llm-minimax', 'llm-zcode', 'llm-gemini',
   )
   const service = new CodeArtsAuth(ctx)
@@ -869,6 +870,45 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
     readImage: makeReadImage(ctx),
     accountPool: pool,
     product: TRAE,
+  })
+
+  // ===== TRAE 国际版（trae-intl）服务 =====
+  // 第六个产品线的**第二个实例**（与上面 `trae` 同 TraeAuth / TraeAdapter 类，
+  // 差异全在 `TRAE_INTL` 配置里：域名 `*.trae.ai`、ClientID `ono9krqynydwx5`、
+  // app_id(tea) 677332、IDEVersion 3.5.87 stable_i18n、Plugin 2.3.68993，
+  // 以及一张自己的 8 条国际版模型表）。刻意**不复制**任何 trae*.ts 实现文件
+  // —— 协议同源，复制会让同类缺陷（SSE 漏帧、续期串路、签到幂等）修两遍。
+  // 服务名由 TraeAuth 依 product.id 派生，注册为 ctx.traeIntlAuth。
+  // 不注册斜杠命令：入口在 Channel Pack 的「TRAE (国际版)」面板。
+  const traeIntl = new TraeAuth(ctx)
+  const traeIntlAdapter = registerTraeLlm(ctx, {
+    credentialRef: credentialRef(TRAE_INTL.defaultCredentialRef),
+    resolveCredential: async (modelId?: string) => {
+      // ⚠️ provider 实参必须是 TRAE_INTL.id：写死 'trae' 会让国际版
+      // 永远查不到自己的账号（与 Qoder 国际/中国 同因的踩坑教训）。
+      // ⚠️ `modelId` 必须透传：限流是**按模型**记的（`modelRateLimits[model]`）。
+      const available = await pool.getAvailableAccount(TRAE_INTL.id, modelId ?? '')
+      if (available) {
+        reportLedgerAccount(TRAE_INTL.id, available.entry.id)
+        return available.credential as TraeCredential
+      }
+      const resolved = await ctx.credentials.resolve(credentialRef(TRAE_INTL.defaultCredentialRef))
+      if (!resolved) return undefined
+      try {
+        return JSON.parse(resolved.value) as TraeCredential
+      } catch {
+        return undefined
+      }
+    },
+    refresh: async () => {
+      const available = await pool.getAvailableAccount(TRAE_INTL.id, '')
+      if (available) await traeIntl.refreshAccountCredential(available.entry.credentialRef, pool, available.entry.id)
+      else await traeIntl.refresh()
+    },
+    fetchRemoteModels: () => traeIntl.fetchModels(pool),
+    readImage: makeReadImage(ctx),
+    accountPool: pool,
+    product: TRAE_INTL,
   })
 
   // ===== Cline（Cline 桌面端 / Cline API）服务 =====
@@ -1619,6 +1659,17 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
   }).catch((error: unknown) => {
     ctx.logger.warn(`[channel-pack] 修正 TRAE 账号显示名失败：${String(error)}`)
   })
+  // TRAE **国际版**同款修复 —— 早期 workbuddy 那次缺陷就是漏了同族实例的
+  // 启动期自愈；这里国际版的展示名同样是 uid 派生、也走 GetUserInfo 拿脱敏手机号。
+  void traeIntl.repairAccountNicknames(pool).then((repaired) => {
+    if (repaired.length > 0) {
+      ctx.logger.info(
+        `[channel-pack] 已修正 ${repaired.length} 个 TRAE (国际版) 账号的显示名：${repaired.join(', ')}`,
+      )
+    }
+  }).catch((error: unknown) => {
+    ctx.logger.warn(`[channel-pack] 修正 TRAE (国际版) 账号显示名失败：${String(error)}`)
+  })
 
   // 一次性修复**老 LobsterAI 账号**的展示名（同类，但成因不同）：
   // 服务端把**手机号本身**当 `user.nickname` 下发，且只脱敏到「露末 4 位」
@@ -1671,6 +1722,9 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
     ['qoder', (p) => qoder.refreshAll(p)],
     ['qodercn', (p) => qoderCn.refreshAll(p)],
     ['trae', (p) => trae.refreshAll(p)],
+    // TRAE **国际版**同款（同 TraeAuth 类，但 `product` 是 TRAE_INTL）——
+    // ⚠️ 漏加这一行会让国际版账号**永远不自动续期**（Qoder 真实缺陷同因）。
+    ['trae_intl', (p) => traeIntl.refreshAll(p)],
     ['cline', (p) => cline.refreshAll(p)],
     // ⚠️ Loomy 不可续期：这里只探测**已过期**的账号（见 LoomyAuth.refreshAll）。
     ['loomy', (p) => loomy.refreshAll(p)],
@@ -1739,6 +1793,7 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
       qoder.stop()
       qoderCn.stop()
       trae.stop()
+      traeIntl.stop()
       cline.stop()
       loomy.stop()
       zcode.stop()
@@ -1765,6 +1820,7 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
     qoder.stop()
     qoderCn.stop()
     trae.stop()
+    traeIntl.stop()
     cline.stop()
     loomy.stop()
     zcode.stop()
@@ -1941,6 +1997,10 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
     qoder: pruned(QODER.id, qoderAdapter),
     qodercn: pruned(QODER_CN.id, qoderCnAdapter),
     trae: pruned(TRAE.id, traeAdapter),
+    // TRAE **国际版**适配器（与 `trae` 同 TraeAdapter 类、不同 product）—— 不加
+    // 的话「显示列表」拿不到全量目录（漏模型），且 modelAdapters 缺这条会让
+    // 客户端看不到国际版专属模型 id 的展示名。
+    trae_intl: pruned(TRAE_INTL.id, traeIntlAdapter),
     cline: pruned(CLINE.id, clineAdapter),
     loomy: pruned(LOOMY.id, loomyAdapter),
     raccoon: pruned(RACCOON.id, raccoonAdapter),
@@ -1955,7 +2015,7 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
   // 丢的却是「下一轮工具调用能不能带上签名」。
   ctx.effect(() => () => { void geminiSigStore.flush().catch(() => {}) })
 
-  registerChannelPackRpc(ctx, pool, service, buddy, workbuddy, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config)
+  registerChannelPackRpc(ctx, pool, service, buddy, workbuddy, lobsterai, qoder, qoderCn, trae, traeIntl, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config)
   // 网关是旁路功能：这里传 `pool` 只为读设置页里的开关，其内部任何失败都已
   // 自行降级为日志，绝不会让插件 apply() 失败。
   mountOpenAiGateway(ctx, pool)

@@ -20,10 +20,8 @@
 import { createServer, type Server } from 'node:http'
 import { credentialExpiresAtMs, jwtExpiresAtMs } from './buddy.js'
 import {
-  TRAE_EXCHANGE_PATH,
   TRAE_LOGIN_TIMEOUT_MS,
   TRAE_REQUEST_TIMEOUT_MS,
-  TRAE_USER_INFO_PATH,
   buildTraeCredential,
   generateDeviceId,
   generateMachineId,
@@ -34,7 +32,11 @@ import {
   type TraeExchangeResult,
   type TraeUserInfoResult,
 } from './trae.js'
-import type { TraeProduct } from './trae-product.js'
+import {
+  traeExchangePathFor,
+  traeUserInfoPathFor,
+  type TraeProduct,
+} from './trae-product.js'
 
 /** 回调端口：TRAE 默认 18080（被占用时自动回退随机端口，见 `listenWithFallback`）。 */
 const TRAE_CALLBACK_PORT = 18080
@@ -378,7 +380,7 @@ export async function exchangeTraeCallback(
       ClientSecret: '-',
       UserID: '',
     }
-    const exchangeResp = await fetcher(`${product.oauthHost}${TRAE_EXCHANGE_PATH}`, {
+    const exchangeResp = await fetcher(`${product.oauthHost}${traeExchangePathFor(product)}`, {
       method: 'POST',
       headers: traeOAuthHeaders(product),
       body: JSON.stringify(exchangeBody),
@@ -416,7 +418,7 @@ export async function exchangeTraeCallback(
   try {
     const uHeaders = traeOAuthHeaders(product)
     uHeaders['X-Cloudide-Token'] = exchange.accessToken
-    const userInfoResp = await fetcher(`${product.oauthHost}${TRAE_USER_INFO_PATH}`, {
+    const userInfoResp = await fetcher(`${product.oauthHost}${traeUserInfoPathFor(product)}`, {
       method: 'POST',
       headers: uHeaders,
       body: JSON.stringify({ ReqSource: 'IDE', IDEVersion: product.ideVersion }),
