@@ -38737,7 +38737,7 @@ function traeUserInfoPathFor(_product) {
   return "/cloudide/api/v3/trae/GetUserInfo";
 }
 function traeEntUsagePathFor(product) {
-  return product.id === "trae_intl" ? "/trae/api/v1/pay/ide_user_pay_status" : "/trae/api/v2/pay/ide_user_ent_usage";
+  return product.id === "trae_intl" ? "/trae/api/v1/pay/ide_user_ent_usage" : "/trae/api/v2/pay/ide_user_ent_usage";
 }
 function traeCheckinStatusPathFor(_product) {
   return "/trae/api/v2/ug/checkin_credits/status";
@@ -38905,8 +38905,27 @@ function traeCheckinHeaders(credential, product, userId) {
       "Accept-Encoding": "gzip, deflate",
       "Accept-Language": "en-US",
       "User-Agent": product.userAgent,
-      // ⚠️ 头名是**小写** `x-cloudide-token`（真身 `getUserInfo` 请求原文）。
-      "x-cloudide-token": credential.access_token,
+      // ✅ 更正（2026-10-15）：国际版 pay 端点**只认**
+      // `Authorization: Cloud-IDE-JWT <access_token>`。
+      //
+      // 此前这里发的是**小写 `x-cloudide-token`**（注释称来自
+      // `GetUserInfo` 真身）且**完全没有 Authorization** ——
+      // 实测 `POST /trae/api/v1/pay/ide_user_ent_usage` 恒
+      // `401 {"code":1001}`，国际版余额因此永远是 null。
+      // 逐头实测（`tmp/probe-ent-headers.mjs`）：
+      //
+      // | 头集合                                | 结果 |
+      // |---------------------------------------|------|
+      // | 全量（含 `Authorization`）             | 200 带额度 |
+      // | 去掉 `X-Cloudide-Token`                | 200 带额度（可省） |
+      // | 去掉 `Authorization`                    | **401** |
+      // | 只留小写 `x-cloudide-token` + `x-uid`   | **401** |
+      // | 插件改前的整套 `stable_i18n` 头         | **401** |
+      //
+      // 即 `X-Cloudide-Token` 冗余但无害，`x-cloudide-token` 单独用无效。
+      Authorization: `Cloud-IDE-JWT ${credential.access_token}`,
+      "X-Cloudide-Token": credential.access_token,
+      "x-uid": userId,
       "X-Market-User-Id": marketUserId,
       "X-User-Region": "SG",
       "X-Device-Id": deviceId,
@@ -57708,6 +57727,9 @@ function readString7(source, key) {
   const value = source[key];
   return typeof value === "string" ? value : "";
 }
+function readBoolean(source, key) {
+  return source[key] === true;
+}
 function readClaimCode(body) {
   const raw = body.code;
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
@@ -57837,6 +57859,7 @@ async function fetchTraeCreditBalance(credential, product, fetcher = fetch) {
   const packages = [];
   let total = 0;
   let expiredTotal = 0;
+  const dollarBilling = readBoolean(body, "is_dollar_usage_billing") === true;
   for (const item of packList) {
     if (typeof item !== "object" || item === null) continue;
     const entry = item;
@@ -57845,18 +57868,22 @@ async function fetchTraeCreditBalance(credential, product, fetcher = fetch) {
     const quota = base.quota;
     if (typeof quota !== "object" || quota === null) continue;
     const creditsLimit = readNumber9(quota, "credits_limit");
-    if (creditsLimit <= 0) continue;
+    const basicLimit = readNumber9(quota, "basic_usage_limit");
+    if (creditsLimit <= 0 && basicLimit <= 0 && readNumber9(quota, "premium_model_fast_request_limit") <= 0) continue;
     const usage = entry.usage;
-    const used = typeof usage === "object" && usage !== null ? readNumber9(usage, "credits_amount") : 0;
-    const expireSec = readNumber9(entry, "expire_time");
+    const hasUsage = typeof usage === "object" && usage !== null;
+    const used = dollarBilling ? hasUsage ? readNumber9(usage, "basic_usage_amount") : 0 : hasUsage ? readNumber9(usage, "credits_amount") : 0;
+    const limit = dollarBilling ? basicLimit : creditsLimit;
+    const expireSec = readNumber9(entry, "expire_time") || readNumber9(base, "end_time");
     const deductionEndMs = expireSec > 0 ? expireSec * 1e3 : void 0;
-    const pkg = {
+    const planName = readString7(entry, "display_desc") || readString7(base, "display_desc") || "\u8D44\u6E90\u5305";
+    const pack = {
       // ⚠️ 包名用 `display_desc`（实测"每月登录赠送"/"签到奖励"/"免费"），
       // 不是 `base.name` —— 后者实测为 undefined，旧代码全部回退成了"资源包"。
-      name: readString7(base, "display_desc") || readString7(entry, "display_desc") || "\u8D44\u6E90\u5305",
-      unit: "credits",
-      remaining: creditsLimit - used,
-      total: creditsLimit,
+      name: dollarBilling ? `${planName} \xB7 \u57FA\u7840\u989D\u5EA6` : planName,
+      unit: dollarBilling ? "USD" : "credits",
+      remaining: limit - used,
+      total: limit,
       used,
       active: true,
       cycleStartTime: "",
@@ -57864,8 +57891,33 @@ async function fetchTraeCreditBalance(credential, product, fetcher = fetch) {
       expiredTime: "",
       ...deductionEndMs !== void 0 ? { deductionEndTime: deductionEndMs } : {}
     };
-    packages.push(pkg);
-    total += pkg.remaining;
+    packages.push(pack);
+    total += pack.remaining;
+    if (!dollarBilling) continue;
+    const bonusLimit = readNumber9(quota, "bonus_usage_limit");
+    if (bonusLimit > 0) {
+      const bonusUsed = hasUsage ? readNumber9(usage, "bonus_usage_amount") : 0;
+      const bonusPack = {
+        ...pack,
+        name: `${planName} \xB7 \u8D60\u9001\u989D\u5EA6`,
+        remaining: bonusLimit - bonusUsed,
+        total: bonusLimit,
+        used: bonusUsed
+      };
+      packages.push(bonusPack);
+      total += bonusPack.remaining;
+    }
+    const fastRequests = readNumber9(quota, "premium_model_fast_request_limit");
+    if (fastRequests > 0) {
+      packages.push({
+        ...pack,
+        name: `${planName} \xB7 \u5FEB\u901F\u8BF7\u6C42\u6B21\u6570`,
+        unit: "\u6B21",
+        remaining: fastRequests,
+        total: fastRequests,
+        used: 0
+      });
+    }
   }
   return { total, packages, expiredTotal };
 }

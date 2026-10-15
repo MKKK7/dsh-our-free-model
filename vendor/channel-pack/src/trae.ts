@@ -355,16 +355,16 @@ export function traeCheckinHeaders(
   const sessionId = deriveSessionId(userId)
   const traceId = `00-${randomHex(16)}-01`
   const requestId = uuidV4()
-  // ⚠️ **必须按产品分流**（国际版余额/签到失败的根因）：
+  // ⚠️ **必须按产品分流**（国际版余额/签到失败的根因之一）：
   //
-  // 真身（`main.log` 国际版日志）访问
-  // `https://growsg-normal.trae.ai/trae/api/v1/pay/ide_user_pay_status`
-  // 时带的是 **`x-cloudide-token`** 头；CN 那套
-  // `Authorization: Cloud-IDE-JWT …` + `X-User-Region: CN` +
-  // `Package-Type: stable_cn` 是**中国区**专用形态，发到国际版域名上
-  // 服务端不认 → 余额查询失败。
+  // 国际版 `https://growsg-normal.trae.ai` 与 CN 那套
+  // `X-User-Region: CN` + `Package-Type: stable_cn` 的**认证头不同**：
+  // 国际版只认 `Authorization: Cloud-IDE-JWT <access_token>`
+  // （下方分支内有逐头实测表）。CN 域名的 pay 端点才用
+  // `X-Cloudide-Token` + `X-User-Region: CN` 那套。
   //
-  // 早期实现把这两套写死成同一份，且 `trae-credits.ts` 的 postJson 还把
+  // 早期实现把这两套写死成同一份（国际版分支发的是小写 `x-cloudide-token`
+  // 且**没有 Authorization**），且 `trae-credits.ts` 的 postJson 还把
   // product 整个丢掉（传 `{} as never`），导致 `product.ideVersion` 也是
   // undefined —— 头里出现 `App-Version: undefined`。
   const isIntl = product?.pkceEnabled === true
@@ -375,8 +375,27 @@ export function traeCheckinHeaders(
       'Accept-Encoding': 'gzip, deflate',
       'Accept-Language': 'en-US',
       'User-Agent': product.userAgent,
-      // ⚠️ 头名是**小写** `x-cloudide-token`（真身 `getUserInfo` 请求原文）。
-      'x-cloudide-token': credential.access_token,
+      // ✅ 更正（2026-10-15）：国际版 pay 端点**只认**
+      // `Authorization: Cloud-IDE-JWT <access_token>`。
+      //
+      // 此前这里发的是**小写 `x-cloudide-token`**（注释称来自
+      // `GetUserInfo` 真身）且**完全没有 Authorization** ——
+      // 实测 `POST /trae/api/v1/pay/ide_user_ent_usage` 恒
+      // `401 {"code":1001}`，国际版余额因此永远是 null。
+      // 逐头实测（`tmp/probe-ent-headers.mjs`）：
+      //
+      // | 头集合                                | 结果 |
+      // |---------------------------------------|------|
+      // | 全量（含 `Authorization`）             | 200 带额度 |
+      // | 去掉 `X-Cloudide-Token`                | 200 带额度（可省） |
+      // | 去掉 `Authorization`                    | **401** |
+      // | 只留小写 `x-cloudide-token` + `x-uid`   | **401** |
+      // | 插件改前的整套 `stable_i18n` 头         | **401** |
+      //
+      // 即 `X-Cloudide-Token` 冗余但无害，`x-cloudide-token` 单独用无效。
+      Authorization: `Cloud-IDE-JWT ${credential.access_token}`,
+      'X-Cloudide-Token': credential.access_token,
+      'x-uid': userId,
       'X-Market-User-Id': marketUserId,
       'X-User-Region': 'SG',
       'X-Device-Id': deviceId,

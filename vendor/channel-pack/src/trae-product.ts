@@ -378,8 +378,9 @@ export const TRAE: TraeProduct = {
  *   `/cloudide/api/v3/trae/oauth/ExchangeToken`（前缀不同，国际版带 PKCE）。
  * - GetUserInfo：国际版与 CN 路径**完全相同**，换 host 即可（路径函数
  *   仍按 product 分流，避免日后某天再次分叉）。
- * - Pay/entitlement：国际版 v1、CN v2 + 路径名 `ide_user_pay_status` vs
- *   `ide_user_ent_usage`（版本与路径都不同）。
+ * - Pay/entitlement：国际版 v1、CN v2（版本不同，路径名**相同**）。
+ *   ⚠️ 启动日志里只出现过 `pay/ide_user_pay_status`，但它**不带额度**，
+ *   详见 {@link traeEntUsagePathFor} 的更正说明。
  * - chat/models/checkin：**路径两边同名**，按 product 选 host 即可，路径
  *   函数统一返回 CN 字面值。
  */
@@ -395,8 +396,15 @@ export function traeUserInfoPathFor(_product: TraeProduct): string {
 }
 
 export function traeEntUsagePathFor(product: TraeProduct): string {
+  // ✅ 更正（2026-10-15）：国际版**两个** v1 端点都存在，但只有 `ent_usage`
+  // 带 `user_entitlement_pack_list`（额度明细）。
+  // 实测 `POST /trae/api/v1/pay/ide_user_ent_usage` → 200 且含 Pro plan 的
+  // `quota.basic_usage_limit: 20` / `usage.basic_usage_amount`；
+  // 而 `ide_user_pay_status` → 200 但响应里**只有** `enable_solo_*` /
+  // `user_pay_identity` / `trial_status`，没有任何额度字段。
+  // 此前国际版指向 pay_status，于是余额恒为 null。
   return product.id === 'trae_intl'
-    ? '/trae/api/v1/pay/ide_user_pay_status'
+    ? '/trae/api/v1/pay/ide_user_ent_usage'
     : '/trae/api/v2/pay/ide_user_ent_usage'
 }
 

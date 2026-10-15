@@ -529,3 +529,128 @@ text="2" usage={"inputTokens":59,"outputTokens":1}
 注意打印里 `ctx= ?` 不是 bug：`listModels()` 返回的是归一化模型，`contextWindow`
 挂在 `resolveModel()` 的 `context` 字段里（`trae-adapter.ts:889`）。
 
+## 余额修复：国际版美元计费此前恒为 null（2026-10-15）
+
+用户报「余额不显示」。查下来是**三个独立缺陷叠在一起**，每一个都足以让
+`fetchTraeCreditBalance` 返回 `null`。
+
+### 缺陷 1：端点指错（`trae-product.ts` `traeEntUsagePathFor`）
+
+国际版指向 `/trae/api/v1/pay/ide_user_pay_status`。该端点**确实 200**，但响应里
+只有 `enable_solo_*` / `user_pay_identity` / `trial_status`，**没有任何额度字段**。
+真正带 `user_entitlement_pack_list` 的是同前缀下的 `ide_user_ent_usage`（两个都 200，
+启动日志里只出现过前者，误导了早前的实现）。已改指 `ent_usage`。
+
+### 缺陷 2：认证头形态错（`trae.ts` `traeCheckinHeaders` 的国际版分支）
+
+国际版分支发的是小写 `x-cloudide-token` 且**完全没有 `Authorization`**。
+逐头实测（`tmp\probe-ent-headers.mjs`）：
+
+| 头集合 | 结果 |
+|---|---|
+| 全量（含 `Authorization: Cloud-IDE-JWT <token>`） | 200 带额度 |
+| 去掉 `X-Cloudide-Token` | 200 带额度（可省） |
+| **去掉 `Authorization`** | **401 `{"code":1001}`** |
+| 只留小写 `x-cloudide-token` + `x-uid` | **401** |
+| 插件改前的整套 `stable_i18n` 头 | **401** |
+
+即：**唯一必需的是 `Authorization: Cloud-IDE-JWT <access_token>`**。
+`X-Cloudide-Token` 冗余无害，小写 `x-cloudide-token` 单独用无效。已补 `Authorization`
+并保留原头，同时把那句「真身用小写 x-cloudide-token」的注释改成实测结论。
+
+### 缺陷 3：额度不在 `credits_limit` 上（`trae-credits.ts`）
+
+国际版是**美元计费**（`is_dollar_usage_billing: true`，`billing_version: 3`），
+而原判据是 `if (creditsLimit <= 0) continue` —— 国际版 `credits_limit` **恒为 0**，
+于是每个包都被滤掉，`packages` 恒空。
+
+字段对照（Pro $20 账号实测）：
+
+| 语义 | 国内版（积分） | 国际版（美元） |
+|---|---|---|
+| 套餐额度 | `quota.credits_limit` | `quota.basic_usage_limit`（20 USD/月） |
+| 已用 | `usage.credits_amount` | `usage.basic_usage_amount` |
+| 赠送 | —— | `quota.bonus_usage_limit` / `usage.bonus_usage_amount` |
+| 快速请求数 | —— | `quota.premium_model_fast_request_limit`（600 次） |
+
+改动：按 `is_dollar_usage_billing` 分流；美元形态下基础额度 / 赠送额度各占一个包，
+「快速请求次数」单列一个 `unit: '次'` 的包且**不并入 `total`**（并进去会让美元余额虚高）。
+另外条目级 `expire_time` 在国际版**恒为 0**，到期时间只能取 `base.end_time`
+（Pro 实测 1793583752 = 2026-10-31），已加兜底 —— 不加就永远显示「永久」。
+
+### 自测（`tmp\e2e-trae-credits.mjs`，真实凭据打真实端点）
+
+```json
+{
+  "total": 19.97892,
+  "packages": [
+    { "name": "Pro plan · 基础额度", "unit": "USD",
+      "remaining": 19.97892, "total": 20, "used": 0.02108,
+      "deductionEndTime": 1793583752000 },
+    { "name": "Pro plan · 快速请求次数", "unit": "次",
+      "remaining": 600, "total": 600, "used": 0 }
+  ],
+  "expiredTotal": 0
+}
+```
+
+> ⚠️ `TraeCredential` 的字段名是**下划线**（`access_token` / `refresh_token` /
+> `machine_id` / `device_id`），不是驼峰。测试脚本一开始按驼峰写，表现为 401
+> —— 排查这个 401 花了比写功能本身更长的时间。
+
+## access_token 会被上游作废（不是过期）
+
+某天所有原本 200 的脚本突然全 `401 {"code":1001,"message":"...not able to
+authenticate you..."}`，而 `expires_at` 显示还有 13 天。原因不是过期，是**正在运行的
+Trae 客户端轮换 refresh_token 时把旧的 access_token 连带吊销了**。
+
+手搓续期（只带 `ClientID` / `RefreshToken`）会失败：
+
+```
+POST https://growsg-normal.trae.ai/trae/api/v3/oauth/ExchangeToken
+→ 401 {"Code":"20403","Message":"Token device not match."}
+```
+
+国际版**必须带 `DeviceInfo` + `DeviceProof`**（ECDSA P-256 签名），所以正确做法是
+直接调插件自己的 `exchangeTraeCallback(...)`（`tmp\refresh-intl-via-plugin.mjs`
+用 esbuild 打包 `trae-oauth.ts` 调用）。写回 yaml 时踩到的三个坑：
+
+1. 整份 `.credentials.yaml` 结构上是「单引号标量 + 真实换行」，**不能按行切**，
+   要用 `indexOf(KEY + ':')` 定位后配对扫描引号（`''` 是转义）。
+2. 标量里的 JSON 含**真实换行**（PEM），整段**不是合法 JSON** ——
+   `JSON.parse` 报 `Bad control character in string literal`。只能用正则抠单个字段、
+   原位字符串替换写回。
+3. YAML 折行把 PEM 切成 `-----BEGIN PRIVATE` + 真换行 + 4 空格缩进 + `KEY-----`，
+   且该写入器把折行还原成**零宽**（`-----BEGIN PRIVATEKEY-----`）。还原公式：
+   `s.replace(/\r?\n[ \t]*/g,' ').replace(/\\n/g,'\n')` —— 前者补回词边界空格，
+   后者把 JSON 的 `\n` 还原成真换行；少了后者，base64 里混进反斜杠和字母 n，
+   DER 解出来报 `ERR_OSSL_ASN1_TOO_LONG`。
+
+> ⚠️ `exchangeTraeCallback` 的返回里**没有** `expiresAt` 字段。按直觉写回会把
+> `"expires_at":"undefined"` 落进 yaml。已用 JWT 的 `exp * 1000` 修正
+> （`tmp\fix-expires-at.mjs`，实测 1793239909000 = 2026-10-29）。
+
+## 选模实测：国际版 HTTP 层无法选模（决定性结论，11×4 组合）
+
+`tmp\probe-selection.mjs`（44 条，落盘 `tmp\mitm\real\selection-matrix.json`）：
+
+| function | `provider_model_name` | 模型自述 |
+|---|---|---|
+| `inline_chat` | `ep-20250724133548-k5xl9` | 恒为 Seed / ByteDance |
+| `chat_v3` | `ep-20260907150747-7hcmj` | 恒为 Seed / Doubao |
+| `builder_v3` | `ep-20260907150747-7hcmj` | 同上 |
+| `agent_v3` | — | `2001 no function config found` |
+
+11 个 `model` 取值（空串 / 8 个裸模型名 / `agent_1__…_null` / `solo_agent_1__…_null`
+两类 key）在每个 function 下**全部落到同一个池**。SSE 的 `metadata` 事件回显
+`"model":""` —— 服务端压根没从我们发的字段里读到模型。
+
+即 `function` 只在两个池之间切换、`model` 完全被忽略，而两个池都是字节自家模型。
+真实选模走渲染进程 → Rust TransportManager 的 RPC（URL 构造在 Rust 二进制里），
+HTTP 层复现不了。**这是上游行为，不是适配器的 bug。**
+
+官方套餐表（[fast.io](https://fast.io/resources/trae-ai-limits/)，2026-10-11 更新）
+里 Lite 及以上确实是 "Auto mode + Manual selection"，所以界面里能切是事实 ——
+只是那条路径不在我们能碰的 HTTP 层。
+
+

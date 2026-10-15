@@ -120,6 +120,11 @@ function readString(source: Record<string, unknown>, key: string): string {
   return typeof value === 'string' ? value : ''
 }
 
+/** 只认真正的布尔 `true` —— 服务端偶尔下发 `'true'` 字符串，不做宽松转换。 */
+function readBoolean(source: Record<string, unknown>, key: string): boolean {
+  return source[key] === true
+}
+
 /**
  * 读取业务码，兼容数字与字符串形态。
  *
@@ -355,6 +360,24 @@ export async function fetchTraeCreditBalance(
   let total = 0
   let expiredTotal = 0
 
+  /**
+   * 国际版是**美元计费**（`is_dollar_usage_billing: true`，Pro 套餐
+   * `basic_usage_limit: 20` 美元/月），额度不在 `credits_limit` 上 —— 它恒为
+   * `0`。所以下面那个 `if (creditsLimit <= 0) continue` 会把**所有**国际版包
+   * 滤掉，`packages` 恒空、余额恒 `null`（2026-10-15 实测）。
+   *
+   * 两种计费形态的字段对照（实测 Pro $20 账号，`ide_user_ent_usage`）：
+   *
+   * | 语义        | 国内版（积分）      | 国际版（美元）              |
+   * |-------------|--------------------|-----------------------------|
+   * | 套餐额度    | `credits_limit`    | `basic_usage_limit`（USD）  |
+   * | 已用        | `credits_amount`   | `basic_usage_amount`（USD） |
+   * | 赠送额度    | ——                 | `bonus_usage_limit` / `_amount` |
+   * | 快速请求数  | ——                 | `premium_model_fast_request_limit`（次，600） |
+   * | 计费版本    | ——                 | `billing_version: 3`        |
+   */
+  const dollarBilling = readBoolean(body, 'is_dollar_usage_billing') === true
+
   for (const item of packList) {
     if (typeof item !== 'object' || item === null) continue
     const entry = item as Record<string, unknown>
@@ -363,12 +386,17 @@ export async function fetchTraeCreditBalance(
     const quota = base.quota as Record<string, unknown> | undefined
     if (typeof quota !== 'object' || quota === null) continue
     const creditsLimit = readNumber(quota, 'credits_limit')
-    if (creditsLimit <= 0) continue
+    const basicLimit = readNumber(quota, 'basic_usage_limit')
+    // 国内版靠 `credits_limit > 0` 判「这个包有额度」；国际版它恒 0，
+    // 改用美元额度与快速请求数判。两者都拿不到才是真的空包。
+    if (creditsLimit <= 0 && basicLimit <= 0 && readNumber(quota, 'premium_model_fast_request_limit') <= 0) continue
 
     const usage = entry.usage as Record<string, unknown> | undefined
-    const used = typeof usage === 'object' && usage !== null
-      ? readNumber(usage, 'credits_amount')
-      : 0
+    const hasUsage = typeof usage === 'object' && usage !== null
+    const used = dollarBilling
+      ? (hasUsage ? readNumber(usage, 'basic_usage_amount') : 0)
+      : (hasUsage ? readNumber(usage, 'credits_amount') : 0)
+    const limit = dollarBilling ? basicLimit : creditsLimit
 
     // 到期时间（2026-09-29 抓包取证，推翻早前"起始日期+31天"的推断方案）：
     // 服务端在**条目级**直接下发 `expire_time` —— **秒级** Unix 时间戳
@@ -377,16 +405,19 @@ export async function fetchTraeCreditBalance(
     // ⚠️ 秒 → 毫秒必须 ×1000；不乘会让显示落在 1970 年。
     // `base_info.end_time` 与它同值（备用来源），`yearly_expire_time` 实测恒 0
     // 不取。拿不到（0/缺失）就不设置 deductionEndTime（前端显示"永久"）。
-    const expireSec = readNumber(entry, 'expire_time')
+    // ⚠️ 国际版的条目级 `expire_time` **恒为 0**，真到期时间只在
+    // `base.end_time`（Pro 实测 1793583752）—— 不取兜底就永远显示"永久"。
+    const expireSec = readNumber(entry, 'expire_time') || readNumber(base, 'end_time')
     const deductionEndMs = expireSec > 0 ? expireSec * 1000 : undefined
 
-    const pkg: CreditPackage = {
+    const planName = readString(entry, 'display_desc') || readString(base, 'display_desc') || '资源包'
+    const pack: CreditPackage = {
       // ⚠️ 包名用 `display_desc`（实测"每月登录赠送"/"签到奖励"/"免费"），
       // 不是 `base.name` —— 后者实测为 undefined，旧代码全部回退成了"资源包"。
-      name: readString(base, 'display_desc') || readString(entry, 'display_desc') || '资源包',
-      unit: 'credits',
-      remaining: creditsLimit - used,
-      total: creditsLimit,
+      name: dollarBilling ? `${planName} · 基础额度` : planName,
+      unit: dollarBilling ? 'USD' : 'credits',
+      remaining: limit - used,
+      total: limit,
       used,
       active: true,
       cycleStartTime: '',
@@ -394,10 +425,42 @@ export async function fetchTraeCreditBalance(
       expiredTime: '',
       ...(deductionEndMs !== undefined ? { deductionEndTime: deductionEndMs } : {}),
     }
-    packages.push(pkg)
-    total += pkg.remaining
+    packages.push(pack)
+    total += pack.remaining
+
+    if (!dollarBilling) continue
+
+    // 美元形态下另外两笔额度要各占一个包，否则用户看到的余额不含它们。
+    const bonusLimit = readNumber(quota, 'bonus_usage_limit')
+    if (bonusLimit > 0) {
+      const bonusUsed = hasUsage ? readNumber(usage, 'bonus_usage_amount') : 0
+      const bonusPack: CreditPackage = {
+        ...pack,
+        name: `${planName} · 赠送额度`,
+        remaining: bonusLimit - bonusUsed,
+        total: bonusLimit,
+        used: bonusUsed,
+      }
+      packages.push(bonusPack)
+      total += bonusPack.remaining
+    }
+
+    const fastRequests = readNumber(quota, 'premium_model_fast_request_limit')
+    if (fastRequests > 0) {
+      // ⚠️ 这是**次**数不是金额，绝不能并进 `total` —— 那会让美元余额虚高。
+      // 单独成一个包且不累加，UI 上单位是「次」自明。
+      packages.push({
+        ...pack,
+        name: `${planName} · 快速请求次数`,
+        unit: '次',
+        remaining: fastRequests,
+        total: fastRequests,
+        used: 0,
+      })
+    }
   }
 
+  // ⚠️ `total` 只累加货币单位，`次` 的包不加 —— 上面的循环已保证。
   return { total, packages, expiredTotal }
 }
 
