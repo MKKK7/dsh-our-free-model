@@ -448,9 +448,9 @@ export function traeModelsBodyFor(product: TraeProduct): Record<string, unknown>
 }
 
 /**
- * 兜底模型目录（国际版，18 条 —— **上游 Solo Agent 模型选择器的真实条目**，2026-10-15 刷新）。
+ * 兜底模型目录（国际版，**22 条** —— 上游 Solo Agent 模型选择器的真实条目，2026-10-15 刷新）。
  *
- * ## 来源与两次修正
+ * ## 来源与三次修正（v1/v2/v3 均已作废，现行的是 v4）
  *
  * **v1（已作废）** 手写的 8 条（Claude-Sonnet-4.6 / DeepSeek-V4-Flash / Kimi-K3 …）
  * 在服务端**根本不存在**，纯属猜测。
@@ -461,35 +461,53 @@ export function traeModelsBodyFor(product: TraeProduct): Record<string, unknown>
  * 并不是用户在 Trae 界面里看到的那个下拉框。扫了 24 个 `type` 值，
  * 只有 `llm_raw_chat` / `chat`（同名单）与 `builder`（2 条）返回 200，
  * 其余全 `400 {"code":4001}`；`chat_v3` / `solo_agent` / `builder_v3` 等
- * 真实标签值直接当 `type` 发会被拒（400）。
+ * 真实标签值直接当 `type` 发会被拒（400）。故**不能直接调 `model_list` 拿真目录**。
  *
- * **v3（本表）** Trae 真正的模型目录走**渲染进程 → Rust TransportManager 的 RPC**
+ * **v3（已作废，18 条）** Trae 真正的模型目录走**渲染进程 → Rust TransportManager 的 RPC**
  * （`{service:"model", method:"model_list"}` / `model_list_by_function` /
  * `get_model_selection_modes`），URL 构造在 Rust 二进制里，JS bundle 里没有字符串常量，
  * 也没有任何 HTTP 路径字面量能对应上——**HTTP 层无法直连复现**。
- * 但客户端把结果落盘在遥测与日志里，本表 18 条即从
- * `%APPDATA%\Trae\logs\*\window1\renderer.log` 的 `model_select_tooltip_show`
- * 与 `model-writeback` 事件中逐条还原（脚本 `tmp\extract-models3.mjs`，
- * 输出 `tmp\trae-intl-model-names.json`），与日志自报的
- * `modelCountByLabel:{agent:17, solo_agent:15, …}` 规模吻合。
+ * v3 从 `%APPDATA%\Trae\logs\*\window1\renderer.log` 的 `model_select_tooltip_show`
+ * 与 `model-writeback` 事件逐条还原（脚本 `tmp\extract-models3.mjs`），
+ * 但那个正则漏了 `-` 与 `.` 混合分隔的 id，只拿到 18 条。
+ *
+ * **v4（本表，22 条）** 正确提取模式是 **`solo_agent_1__<id>_null`**
+ * （2026-10-15 09:35 的 `window4/renderer.log`）。注意日志里 `model list refreshed`
+ * 事件**只记 `modelCountByLabel` 的计数、不含模型名**，所以模型名必须从
+ * `solo_agent_1__…` 这类 key 里抠 —— 这是 v3 漏掉 4 条的根本原因。
+ *
+ * ⚠️ 各 agentType 的条数在不同日志里不一致（`agent` 在不同次抓取里出现过 17 与 12
+ * 两个值），且 `modelCountByLabel` 只给计数不给名单。**不要采信任何单一数字**，
+ * 以最新一次 renderer.log 实抓为准。本表只覆盖 `solo_agent` 一个分组。
+ *
  * `Dola-Seed-2.0-Code` 的 `modelName` 与显示名 `Seed-2.1-Turbo` 不一致，
- * 以 `modelName` 作 id、显示名作 name（其余 17 条两者同名同形）。
+ * 以 `modelName` 作 id、显示名作 name（其余 21 条两者同名同形）。
  *
  * `contextWindow` 统一取 64_000：RPC 返回体未落盘，取不到真值，
  * 这里是**保守估计值**而非上游真值。
  *
  * ## ⚠️⚠️ 选模不生效 —— 这是上游行为，不是本适配器的 bug
  *
- * 用**本表全部 18 条 + 对照假名 `zzz-bogus-control`** 各发一次真实对话
- * （脚本 `tmp\probe-real-models.mjs`，结果 `tmp\mitm\real\model-routing-truth.json`）：
- * 19 次全部 200、全部返回同一个 `provider_model_name` =
- * **`ep-20250724133548-k5xl9`**（字节 Seed 单一模型池）。
- * 早前对 v2 那 9 条的同一实验结论一致，附加 `model_id` / `selected_model` /
- * `model_choice` / `model_list` / `target_model` / `llm_config` 等 7 种选模参数
- * 也全部无效。`coresg-normal.trae.ai/api/ide/v1/llm_raw_chat` 用新模型名仍是
+ * **证据共 57 次真实请求（两轮）**，全部落进同一个池：
+ *
+ * | 轮次 | 规模 | 结论 |
+ * |---|---|---|
+ * | 第一轮 | 4 个 `function` × 11 个 `model` 取值（空串 / 8 个裸模型名 / `agent_1__…_null` / `solo_agent_1__…_null` 两类 key），44 次 | 同一 `provider_model_name` |
+ * | 第二轮 | 13 种变体 × 2 个 host，26 次（`model_name` / `target_model` / `extra_body.model` / `llm_config.model` / 头 `X-Model-Name` / URL `?model=` / system 正文…） | 同一池 |
+ *
+ * 落点：只有 `function` 能切，且仅两个池 ——
+ * `inline_chat` → `ep-20250724133548-k5xl9`，`chat_v3` → `ep-20260907150747-7hcmj`。
+ * **两个池的模型自述都是字节自家**（"I am Seed, developed by ByteDance" /
+ * "Doubao, ByteDance"）。SSE 的 `metadata` 事件回显 `"model":""`，
+ * 说明服务端根本没读我们发的字段。
+ * `coresg-normal.trae.ai/api/ide/v1/llm_raw_chat` 用新模型名仍是
  * `4001 param is invalid`，那是 SOLO 网关，body 形状不同，本插件走不通。
  *
- * 结论：Pro 套餐背后是**单一模型池**，`model` 只是给界面看的标签。
+ * 真实选模在渲染进程的 Rust RPC 里（`bytegate-sg.byteintlapi.com`），
+ * 那里试过 13 条路径 × 4 种 body 全 404。**尚未找遍所有可能路径** ——
+ * 若后续拿到端点/包名/请求形态，这条线索值得继续打。
+ *
+ * 结论：Pro 套餐背后是**极小的模型池**，这 22 个 `model` 值只是给界面看的标签。
  * 本目录的价值是让用户在 DSH 里按上游真实名字选择/显示，
  * **不承诺**切换会换底层模型。保留它是因为它确实是上游目录的真值，不是编的。
  */
