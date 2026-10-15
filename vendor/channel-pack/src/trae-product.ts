@@ -55,6 +55,14 @@ export interface TraeProduct {
   displayName: string
   /** 上游 API 基址（Agent 服务：对话 + 模型列表）。 */
   agentHost: string
+  /**
+   * Agent 服务的**备用基址**，按顺序在主基址不可用时回退。
+   *
+   * 国际版实测 `a0ai-api-sg.byteintlapi.com` 与 `trae-api-sg.mchost.guru`
+   * 对同一 `function: inline_chat` 请求都回 200，且 `session_id` 一致 ——
+   * 说明是同一后端的两个入口，不是两个不同服务。CN 无备用（单入口）。
+   */
+  agentHostFallbacks?: readonly string[]
   /** 签到/积分/Ug 基址。 */
   ugHost: string
   /** OAuth/认证基址（ExchangeToken / GetUserInfo）。 */
@@ -401,10 +409,13 @@ export function traeCheckinClaimPathFor(_product: TraeProduct): string {
 }
 
 export function traeChatPathFor(product: TraeProduct): string {
-  // CN 走 SOLO 的 `agent/v3/llm_utils_chat`；国际版 `agent/v3` 全部 400/404，
-  // 真实聊天端点是 IDE 内置 `ai-completion` 扩展的 `llmRawChatAPI`
-  // （deob 偏移 11372699 的 `llmRawChatRequest`）。
-  return product.id === 'trae_intl' ? '/api/ide/v1/llm_raw_chat' : '/api/agent/v3/llm_utils_chat'
+  // ✅ 更正（2026-10-15）：国际版走**与 CN 相同的** `/api/agent/v3/llm_utils_chat`。
+  // 此前误设为 `/api/ide/v1/llm_raw_chat` —— 那是 SOLO 后端的路径，需要
+  // `coresg-normal.trae.ai` + AES-256-GCM 信封 + 付费 SOLO 权益。
+  // Pro 套餐（$20 美元计费）走的是 `a0ai-api-sg.byteintlapi.com` 的
+  // `inline_chat`，**裸 JSON POST，无信封**，用 OAuth `access_token` 直接当
+  // `Cloud-IDE-JWT` 即可。实测 200 且真实扣 token。
+  return '/api/agent/v3/llm_utils_chat'
 }
 
 export function traeModelsPathFor(product: TraeProduct): string {
@@ -431,14 +442,26 @@ export function traeModelsBodyFor(product: TraeProduct): Record<string, unknown>
 /**
  * 兜底模型目录（国际版，9 条 —— **上游 `model_list` 的真实返回**，非试探）。
  *
- * 来源：`POST https://coresg-normal.trae.ai/api/ide/v1/model_list {"type":"llm_raw_chat"}`
+ * 来源：`POST https://a0ai-api-sg.byteintlapi.com/api/ide/v1/model_list {"type":"llm_raw_chat"}`
  * + `get-svc: 1`，200 响应 `{"model_configs":[…9 条…]}`，全量落盘在
- * `D:\Work\DSH\tmp\mitm\real\model_list.json`。
+ * `D:\Work\DSH\tmp\mitm\real\a0ai_model_list.json`。
  * 每条含 `name` / `display_name` / `prompt_max_tokens` / `model_type`
  * （`chat_model` | `reasoning_model`）/ `multimodal` / `status` / `is_preset`。
  *
  * ⚠️ 更正：本表此前手写的 8 条（Claude-Sonnet-4.6 / DeepSeek-V4-Flash / Kimi-K3 …）
  * **在服务端根本不存在**，全是猜测，已按上游真值替换。
+ *
+ * ⚠️⚠️ **重要实测结论 —— `model` 字段被服务端忽略**（2026-10-15）：
+ * 用本表全部 9 条 + `qwen-3.7-plus` / `DeepSeek-V4-Pro` / `claude-sonnet-4-6` /
+ * `gpt-4o` / `auto` / **假名 `zzz-nonexistent-model`** / **空串** 各发一次，
+ * 全部 200、全部路由到同一个上游端点 `ep-20250724133548-k5xl9`，
+ * 且自报身份都是 **ByteDance**（Seed 系）。附加 `model_id` / `selected_model` /
+ * `model_choice` / `model_list` / `target_model` / `llm_config` 等 7 种选模参数
+ * 也**全部无效**（同一 `provider_model_name`）。
+ *
+ * 结论：Pro 套餐背后是**单一模型池**，`model` 只是标签。本目录的价值是
+ * 让用户在 DSH 里按上游认知的名字选择/切换显示项，**不承诺**切换会换底层模型。
+ * 保留本表是因为它确实是上游 `model_list` 的真值，不是编的。
  */
 const TRAE_INTL_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
   { id: 'gemini-2.5-pro-preview-03-25', name: 'Gemini-2.5-Pro-Preview(0506)', contextWindow: 30_000 },
@@ -453,20 +476,25 @@ const TRAE_INTL_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
 ]
 
 /**
- * 国际版通道白名单 —— **沿用 CN 白名单**。
+ * 国际版通道白名单 —— **只有一个 `inline_chat`**。
  *
- * 国际版客户端在 `out/main.js` 的网络白名单里同样允许 `*.mchost.guru`
- * （CN 走 `trae-api-cn.mchost.guru`，国际版按命名规律是 `trae-api-sg.mchost.guru`），
- * 路径 `api/agent/v3/llm_utils_chat` 未在国际客户端静态文件里出现，但
- * `get_detail_param` 同名 → 大概率同一上游族。**先用 CN 的 15 个通道**，
- * 国际版实际可调用的子集以远端 `get_detail_param` 的 `is_custom_model`
- * 过滤为准。错配会在远端返回 `code=4023 the model is unknown` /
- * `4001 param is invalid`，届时再收敛。
+ * ⚠️ 与 CN 完全不同（2026-10-15 实测，17 个候选逐一发送真实请求）：
  *
- * 同样可用 `DSH_TRAE_CHANNELS` 覆盖。
+ * | 结果 | function |
+ * |---|---|
+ * | ✅ 唯一可调用 | `inline_chat` |
+ * | ❌ `no function config found for appId=6eefa01c-..., function=<f>` | `llm_raw_chat` / `llm_chat` / `raw_chat` / `chat_completion` / `llm_utils_chat` / `completion` / `agent_task` / `solo_chat` / `ide_chat` / `icube_chat` / `cloudide_chat` / `deepseek_chat` / `code_chat` / `v2_chat` / `chat_v2` / `agent_v3_chat` |
+ * | ❌ `4023 the model is unknown` | `chat` / `builder` |
+ *
+ * 国际版 Pro 套餐的 appId 只注册了 `inline_chat` 一个 function config，
+ * 远端按 `appId + function` 二元组查配置，查不到就回 `2001`。
+ * CN 那 15 个 `solo_*` / `*_v3` 通道是**给 SOLO 权益用的**，Pro 账号一律 2001。
+ *
+ * 仍可用 `DSH_TRAE_CHANNELS` 覆盖（注意：写错就是空目录）。
  */
 const TRAE_INTL_CHANNELS: readonly string[] = resolveChannelList(
   process.env.DSH_TRAE_CHANNELS,
+  ['inline_chat'],
 )
 
 /**
@@ -486,13 +514,21 @@ const TRAE_INTL_CHANNELS: readonly string[] = resolveChannelList(
  *     （CN 同路径，换 host）
  *   - 账号区域 API：`https://api-sg-central.trae.ai`（凭据 `host` 字段）
  *   - 付费/权益：`/trae/api/v1/pay/ide_user_pay_status`
- *     （CN 是 `/trae/api/v2/pay/ide_user_ent_usage`，**版本+路径都不同**）
- *   - 对话端点：**`https://coresg-normal.trae.ai`** —— 实测认证 200 且
- *     `app_versions` 回 `{"default_version":"default"}` 印证 `X-App-Version: default`
- *     正确；`X-App-Id` 必须是 `product.json` 的 `agent.appId`
- *     （`6eefa01c-1036-4c7e-9ca5-d891f63bfcd8`，与 CN 同值）。
- *     ⚠️ 早先的猜测 `trae-api-sg.mchost.guru` 对 `/api/ide/v1/*` 全 404，
- *     `bytegate-sg.byteintlapi.com` 全 404 —— 都**不是**对话 host。
+ *     （CN 是 `/trae/api/v2/pay/ide_user_ent_usage`，**版本+路径都不同**）；
+ *     实测该端点要带 SOLO 形态头才 200，响应显示 Pro 套餐
+ *     `enable_solo_*` 全 `true` + `is_dollar_usage_billing: true`
+ *   - 对话端点：**`https://a0ai-api-sg.byteintlapi.com`**（备用
+ *     `https://trae-api-sg.mchost.guru`）—— 实测 `POST /api/agent/v3/llm_utils_chat`
+ *     配 `function: inline_chat` 回 200 并真实扣 token。
+ *
+ * ⚠️ **曾经的三个错假设（2026-10-15 全部推翻，勿回退）**：
+ *   1. host `https://coresg-normal.trae.ai` —— 那是 **SOLO** 后端，
+ *      Pro 账号打上去恒回 `4120`/`4023`，与账号余额无关。
+ *   2. 请求体需要 **AES-256-GCM 信封**（`message` 字段）—— 那是 `llm_raw_chat`
+ *      的反滥用机制，`inline_chat` 走**裸 JSON**。
+ *   3. 需要先 `POST /cloudide/api/v3/trae/GenerateTempToken` 换 JWT ——
+ *      `inline_chat` 直接把 OAuth `access_token` 同时放进
+ *      `Authorization: Cloud-IDE-JWT` 和 `X-Cloudide-Token` 即可。
  *
  * 与 `TRAE` 共用同一个 `TraeAuth` / `TraeAdapter` 类（Qoder 双版本模式）。
  * 差异全部落在本 product 常量 + `*PathFor()` 分派上。
@@ -500,17 +536,20 @@ const TRAE_INTL_CHANNELS: readonly string[] = resolveChannelList(
 export const TRAE_INTL: TraeProduct = {
   id: 'trae_intl',
   displayName: 'Trae (国际版)',
-  agentHost: 'https://coresg-normal.trae.ai',
+  agentHost: 'https://a0ai-api-sg.byteintlapi.com',
+  agentHostFallbacks: ['https://trae-api-sg.mchost.guru'],
   ugHost: 'https://growsg-normal.trae.ai',
   oauthHost: 'https://growsg-normal.trae.ai',
   consoleHost: 'https://www.trae.ai',
   clientId: 'ono9krqynydwx5',
   appId: '6eefa01c-1036-4c7e-9ca5-d891f63bfcd8',
-  ideVersion: '3.5.87',
-  ideVersionCode: '20251013',
+  ideVersion: '3.3.67',
+  ideVersionCode: '20260401',
   deviceBrand: 'Apple',
   osVersion: 'macOS 15.7.4',
-  function: 'solo_agent',
+  // ✅ 实测：国际版 Pro appId 只注册了 `inline_chat` 一个 function
+  // （其余 17 个候选全部 `2001 no function config found`）。
+  function: 'inline_chat',
   channels: TRAE_INTL_CHANNELS,
   fallbackMaxOutputTokens: 32_000,
   maxMode: resolveMaxModeFlag(process.env.DSH_TRAE_MAX_MODE),

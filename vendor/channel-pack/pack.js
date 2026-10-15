@@ -992,7 +992,7 @@ __export(login_exports, {
 });
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { getRandomValues, randomUUID as randomUUID2, randomBytes as randomBytes5 } from "node:crypto";
+import { getRandomValues, randomUUID as randomUUID4, randomBytes as randomBytes5 } from "node:crypto";
 function generateRandomSecret() {
   const bytes = getRandomValues(new Uint8Array(32));
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -1164,7 +1164,7 @@ function startCallbackServer(ticketId, secret, options) {
   });
 }
 async function runLoginFlow(options = {}) {
-  const ticketId = randomUUID2();
+  const ticketId = randomUUID4();
   const secret = generateRandomSecret();
   const { port, server, result } = await startCallbackServer(ticketId, secret, options);
   const { loginUrl } = buildLoginUrl(port, ticketId);
@@ -29072,7 +29072,7 @@ ${captureLines}` : capture.stack;
 
 // vendor/channel-pack/src/index.ts
 import { credentialRef as credentialRef16 } from "@deepseek-ai/dsh-credentials";
-import { LlmError as LlmError21 } from "@deepseek-ai/dsh-llm";
+import { LlmError as LlmError20 } from "@deepseek-ai/dsh-llm";
 import Schema2 from "@deepseek-ai/schemastery";
 
 // vendor/channel-pack/src/llm-adapter.ts
@@ -29082,7 +29082,7 @@ import {
   isContextWindowExceededError,
   isQuotaExceededError,
   LlmAdapter,
-  LlmError as LlmError3,
+  LlmError as LlmError2,
   QUOTA_EXCEEDED_CODE
 } from "@deepseek-ai/dsh-llm";
 import { ReasoningEffortId, ToolCallId } from "@deepseek-ai/dsh-llm";
@@ -30948,7 +30948,7 @@ function normalizeHarnessMessages(messages) {
 }
 
 // vendor/channel-pack/src/sse.ts
-import { EMPTY_RESPONSE_CODE, LlmError as LlmError2 } from "@deepseek-ai/dsh-llm";
+import { EMPTY_RESPONSE_CODE, LlmError } from "@deepseek-ai/dsh-llm";
 async function readWithIdleTimeout(reader, timeoutMs, label, signal, phase = "chunk") {
   if (signal?.aborted) throw signal.reason ?? new Error("aborted");
   let timer;
@@ -30959,7 +30959,7 @@ async function readWithIdleTimeout(reader, timeoutMs, label, signal, phase = "ch
   const readPromise = reader.read();
   const timeoutPromise = new Promise((_, reject) => {
     timer = setTimeout(() => {
-      reject(new LlmError2(`${label}: sse ${phase} timeout after ${timeoutMs}ms`, "TIMEOUT"));
+      reject(new LlmError(`${label}: sse ${phase} timeout after ${timeoutMs}ms`, "TIMEOUT"));
     }, timeoutMs);
   });
   try {
@@ -30967,7 +30967,7 @@ async function readWithIdleTimeout(reader, timeoutMs, label, signal, phase = "ch
     return { done: result.done, value: result.value };
   } catch (error) {
     if (signal?.aborted) throw signal.reason ?? error;
-    if (error instanceof LlmError2) {
+    if (error instanceof LlmError) {
       await reader.cancel().catch(() => {
       });
       throw error;
@@ -32554,7 +32554,7 @@ var CodeArtsAdapter = class extends LlmAdapter {
       credential = await this.options.resolveCredential();
     }
     if (credential === void 0 || !credential.access_key_id || !credential.secret_access_key || !credential.security_token) {
-      throw new LlmError3("codearts: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError2("codearts: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     let currentAccountId = "";
     if (this.options.accountPool && credential?.access_key_id) {
@@ -32679,10 +32679,10 @@ var CodeArtsAdapter = class extends LlmAdapter {
                 continue;
               }
             }
-            throw new LlmError3(message2, QUOTA_EXCEEDED_CODE, { status: 200 });
+            throw new LlmError2(message2, QUOTA_EXCEEDED_CODE, { status: 200 });
           }
           if (error instanceof SseQueueRetryError) {
-          } else if (error instanceof LlmError3 && error.code === BENEFIT_NOT_FOUND_CODE && isBenefitModel && !benefitHeaderDropped) {
+          } else if (error instanceof LlmError2 && error.code === BENEFIT_NOT_FOUND_CODE && isBenefitModel && !benefitHeaderDropped) {
             benefitHeaderDropped = true;
             continue;
           } else {
@@ -32696,7 +32696,7 @@ var CodeArtsAdapter = class extends LlmAdapter {
           await this.options.refresh();
           credential = await this.options.resolveCredential();
           if (credential === void 0 || !credential.access_key_id || !credential.secret_access_key || !credential.security_token) {
-            throw new LlmError3("codearts: credential missing after refresh; log in again", "MISSING_CREDENTIAL");
+            throw new LlmError2("codearts: credential missing after refresh; log in again", "MISSING_CREDENTIAL");
           }
           continue;
         }
@@ -32724,7 +32724,7 @@ var CodeArtsAdapter = class extends LlmAdapter {
               continue;
             }
           }
-          throw new LlmError3(message2, QUOTA_EXCEEDED_CODE, { status: response.status });
+          throw new LlmError2(message2, QUOTA_EXCEEDED_CODE, { status: response.status });
         }
         if (this.options.accountPool && isRateLimited(errorText, response.status)) {
           const parsed = parseRateLimitError(errorText, options.model, response.status);
@@ -32744,7 +32744,7 @@ var CodeArtsAdapter = class extends LlmAdapter {
               authRefreshed = false;
               continue;
             }
-            throw new LlmError3(
+            throw new LlmError2(
               `codearts: \u6A21\u578B ${options.model} \u6240\u6709\u8D26\u53F7\u5747\u53D7\u9650\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5`,
               "QUOTA_EXCEEDED"
             );
@@ -32754,18 +32754,18 @@ var CodeArtsAdapter = class extends LlmAdapter {
           const probe = await this.queryQueueStatus(credential, options.model, options.signal);
           if (probe === void 0 || probe.status === "working") {
             const code = httpErrorCode(response.status, errorText);
-            throw new LlmError3(`codearts: model request failed with HTTP ${response.status}`, code, { status: response.status });
+            throw new LlmError2(`codearts: model request failed with HTTP ${response.status}`, code, { status: response.status });
           }
         }
       }
       queueAttempts += 1;
       if (queueAttempts > QUEUE_MAX_ATTEMPTS2) {
-        throw new LlmError3("codearts: queue wait timed out after 30 minutes", "QUEUE");
+        throw new LlmError2("codearts: queue wait timed out after 30 minutes", "QUEUE");
       }
-      if (options.signal?.aborted) throw new LlmError3("codearts: request aborted while waiting in queue", "QUEUE");
+      if (options.signal?.aborted) throw new LlmError2("codearts: request aborted while waiting in queue", "QUEUE");
       const status = await this.queryQueueStatus(credential, options.model, options.signal);
       if (status?.status === "error" || status?.status === "queue_full") {
-        throw new LlmError3(`codearts: ${status.message || `queue status: ${status.status}`}`, "QUEUE");
+        throw new LlmError2(`codearts: ${status.message || `queue status: ${status.status}`}`, "QUEUE");
       }
       await delay(QUEUE_RETRY_DELAY_MS, options.signal);
     }
@@ -32782,7 +32782,7 @@ var CodeArtsAdapter = class extends LlmAdapter {
    * 处理（10s 间隔重试整个 chat 请求）；不可重试错误抛普通 LlmError。
    */
   async *consumeSse(response, options) {
-    if (!response.body) throw new LlmError3("codearts: empty model response body", "EMPTY_RESPONSE");
+    if (!response.body) throw new LlmError2("codearts: empty model response body", "EMPTY_RESPONSE");
     const blocks = [];
     let nextIndex = 0;
     const toolCalls = /* @__PURE__ */ new Map();
@@ -32871,9 +32871,9 @@ var CodeArtsAdapter = class extends LlmAdapter {
           if (!done) firstTokenReceived = true;
         } catch (error) {
           if (options.signal?.aborted) throw error;
-          if (error instanceof LlmError3) throw error;
+          if (error instanceof LlmError2) throw error;
           if (isTransportError(error)) {
-            throw new LlmError3(`codearts: sse transport error: ${errorMessage(error)}`, "TRANSPORT", { cause: error });
+            throw new LlmError2(`codearts: sse transport error: ${errorMessage(error)}`, "TRANSPORT", { cause: error });
           }
           throw error;
         }
@@ -32904,9 +32904,9 @@ var CodeArtsAdapter = class extends LlmAdapter {
               throw new SseQueueRetryError(data.error_code, message2);
             }
             if (data.error_code === CODEARTS_BENEFIT_NOT_FOUND_ERROR_CODE) {
-              throw new LlmError3(`codearts: ${message2}`, BENEFIT_NOT_FOUND_CODE, { status: 200 });
+              throw new LlmError2(`codearts: ${message2}`, BENEFIT_NOT_FOUND_CODE, { status: 200 });
             }
-            throw new LlmError3(`codearts: ${message2}`, "INVALID_REQUEST", { status: 200 });
+            throw new LlmError2(`codearts: ${message2}`, "INVALID_REQUEST", { status: 200 });
           }
           const choice = data.choices?.[0];
           const delta = choice?.delta;
@@ -33191,7 +33191,7 @@ import {
   CONTEXT_WINDOW_EXCEEDED_CODE as CONTEXT_WINDOW_EXCEEDED_CODE2,
   isContextWindowExceededError as isContextWindowExceededError2,
   LlmAdapter as LlmAdapter2,
-  LlmError as LlmError4,
+  LlmError as LlmError3,
   ReasoningEffortId as ReasoningEffortId2
 } from "@deepseek-ai/dsh-llm";
 import { ToolCallId as ToolCallId2 } from "@deepseek-ai/dsh-llm";
@@ -34207,7 +34207,7 @@ function isContentRejection(body) {
 var BUDDY_POLICY_BLOCK_COOLDOWN_MS = 30 * 6e4;
 function contentRejectionError(productId, status, body, rotated) {
   const scope = rotated ? `\u5168\u90E8\u8D26\u53F7\u5747\u88AB\u670D\u52A1\u7AEF\u5B89\u5168\u7B56\u7565\u62E6\u622A\uFF08HTTP ${status}\uFF0C\u5DF2\u9010\u4E2A\u6362\u53F7\u91CD\u8BD5\uFF09` : `\u5F53\u524D\u8D26\u53F7\u88AB\u670D\u52A1\u7AEF\u5B89\u5168\u7B56\u7565\u62E6\u622A\uFF08HTTP ${status}\uFF0C\u6D41\u5185\u9519\u8BEF\u5E27\u4E0B\u53D1\uFF09`;
-  return new LlmError4(
+  return new LlmError3(
     `${productId}: ${scope}\u3002\u8BE5\u62E6\u622A\u6309\u8D26\u53F7\u751F\u6548\uFF08\u540C\u4E00\u8BF7\u6C42\u5728\u5176\u4ED6\u8D26\u53F7\u53EF\u6B63\u5E38\u8FD4\u56DE\uFF09\uFF0C\u8BF7\u5728 Channel Pack \u505C\u7528\u6216\u66F4\u6362\u88AB\u62E6\u8D26\u53F7\uFF1A${errorDetail2(body)}`,
     "PERMISSION_DENIED",
     { status }
@@ -34664,7 +34664,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError4(
+      throw new LlmError3(
         // ⚠️ 文案里**不能**再提 `/buddy-login` —— 该斜杠命令已随单凭据模式一并移除
         // （AGENTS.md「不注册任何斜杠命令」），入口在 Channel Pack 设置页。
         `${this.product.id}: no usable credential; log in from the Channel Pack panel first`,
@@ -34694,10 +34694,10 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(options.model).includes("image")) {
-        throw new LlmError4(`${this.product.id}: model "${options.model}" does not accept image input.`, "UNSUPPORTED_CONTENT");
+        throw new LlmError3(`${this.product.id}: model "${options.model}" does not accept image input.`, "UNSUPPORTED_CONTENT");
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError4(`${this.product.id}: image input requires the attachment service.`, "UNSUPPORTED_CONTENT");
+        throw new LlmError3(`${this.product.id}: image input requires the attachment service.`, "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       for (const [id, ref] of imageRefs) {
@@ -34710,14 +34710,14 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
         try {
           image = await this.options.readImage(ref);
         } catch (error) {
-          throw new LlmError4(
+          throw new LlmError3(
             `${this.product.id}: \u8BFB\u53D6\u56FE\u7247\u9644\u4EF6\u5931\u8D25\uFF08${id}\uFF09\uFF1A${errorMessage2(error)}`,
             "UNSUPPORTED_CONTENT",
             { cause: error }
           );
         }
         if (image === void 0) {
-          throw new LlmError4(
+          throw new LlmError3(
             `${this.product.id}: \u56FE\u7247\u9644\u4EF6\u8BFB\u53D6\u4E0D\u5230\u5185\u5BB9\uFF08${id}\uFF09\uFF1B\u9644\u4EF6\u670D\u52A1\u53EF\u80FD\u672A\u5C31\u7EEA\uFF0C\u6216\u8BE5\u5BF9\u8C61\u5DF2\u4E0D\u5B58\u5728\u3002`,
             "UNSUPPORTED_CONTENT"
           );
@@ -34845,7 +34845,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
             true
           );
         }
-        throw new LlmError4(`${this.product.id}: credential expired and refresh failed`, "AUTH", { status: authStatus });
+        throw new LlmError3(`${this.product.id}: credential expired and refresh failed`, "AUTH", { status: authStatus });
       }
       if (response.status === 401 || response.status === 403) {
         const detail = await response.text().catch(() => "");
@@ -34857,7 +34857,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
             true
           );
         }
-        throw new LlmError4(
+        throw new LlmError3(
           `${this.product.id}: \u6240\u6709\u8D26\u53F7\u5747\u88AB\u62D2\u7EDD\uFF08HTTP ${authStatus}${authStatus === 401 ? "\uFF0C\u8BF7\u5728 Channel Pack \u91CD\u65B0\u767B\u5F55" : ""}\uFF09\uFF1A${errorDetail2(detail)}`,
           httpErrorCode2(authStatus, detail),
           { status: authStatus }
@@ -34882,7 +34882,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
           if (!isModelSaturationError(response.status, errorText)) break;
         }
         if (isModelSaturationError(response.status, errorText)) {
-          throw new LlmError4(
+          throw new LlmError3(
             `${this.product.id}: \u6A21\u578B ${options.model} \u5F53\u524D\u8BF7\u6C42\u91CF\u9971\u548C\uFF08\u4E0A\u6E38 14003 model busy\uFF0C\u62A5\u6587\u539F\u6587\uFF1A\u300C\u6A21\u578B\u7E41\u5FD9\uFF0C\u8BF7\u6362\u6A21\u578B\u6216\u7A0D\u540E\u91CD\u8BD5\u300D\uFF09\uFF0C\u5DF2\u91CD\u8BD5 ${BUDDY_SATURATION_MAX_RETRIES} \u6B21\u4ECD\u672A\u901A\u8FC7\u3002\u6B64\u4E3A\u8BE5**\u6A21\u578B**\u6574\u4F53\u7E41\u5FD9\uFF0C\u5E76\u975E\u8D26\u53F7\u989D\u5EA6\u95EE\u9898 \u2014\u2014 \u6362\u8D26\u53F7\u65E0\u6548\uFF0C\u8BF7\u6539\u7528\u5176\u5B83\u6A21\u578B\uFF0C\u6216\u7A0D\u540E\u91CD\u8BD5\uFF08\u65E0\u9700\u91CD\u65B0\u767B\u5F55\uFF09\u3002`,
             "RATE_LIMIT",
             { status: response.status }
@@ -34938,7 +34938,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
           }
           if (response.status === 401 || response.status === 403) continue;
           if (!isRateLimited(errorText, response.status)) {
-            throw new LlmError4(`${this.product.id}: ${errorDetail2(errorText)}`, httpErrorCode2(response.status, errorText), { status: response.status });
+            throw new LlmError3(`${this.product.id}: ${errorDetail2(errorText)}`, httpErrorCode2(response.status, errorText), { status: response.status });
           }
         }
         if (sawContentRejection) {
@@ -34949,9 +34949,9 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
             true
           );
         }
-        throw new LlmError4(`${this.product.id}: \u6A21\u578B ${options.model} \u6240\u6709\u8D26\u53F7\u5747\u53D7\u9650\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5`, "QUOTA_EXCEEDED");
+        throw new LlmError3(`${this.product.id}: \u6A21\u578B ${options.model} \u6240\u6709\u8D26\u53F7\u5747\u53D7\u9650\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5`, "QUOTA_EXCEEDED");
       }
-      throw new LlmError4(`${this.product.id}: ${errorDetail2(errorText)}`, httpErrorCode2(response.status, errorText), { status: response.status });
+      throw new LlmError3(`${this.product.id}: ${errorDetail2(errorText)}`, httpErrorCode2(response.status, errorText), { status: response.status });
     }
     yield* this.consumeSse(response, options, currentAccountId);
   }
@@ -34979,7 +34979,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
     } catch (error) {
       if (options.signal?.aborted) throw error;
       if (isTransportError2(error)) {
-        throw new LlmError4(`${this.product.id}: transport error: ${errorMessage2(error)}`, "TRANSPORT", { cause: error });
+        throw new LlmError3(`${this.product.id}: transport error: ${errorMessage2(error)}`, "TRANSPORT", { cause: error });
       }
       throw error;
     }
@@ -34993,7 +34993,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
    * 只有 index——按 index 缓存 id 保证同一工具的所有分片 id 一致。
    */
   async *consumeSse(response, options, policyBlockedAccountId) {
-    if (!response.body) throw new LlmError4(`${this.product.id}: empty model response body`, "EMPTY_RESPONSE");
+    if (!response.body) throw new LlmError3(`${this.product.id}: empty model response body`, "EMPTY_RESPONSE");
     const blocks = [];
     let nextIndex = 0;
     const loopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
@@ -35021,9 +35021,9 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
           if (!result.done) firstTokenReceived = true;
         } catch (error) {
           if (options.signal?.aborted) throw error;
-          if (error instanceof LlmError4) throw error;
+          if (error instanceof LlmError3) throw error;
           if (isTransportError2(error)) {
-            throw new LlmError4(`${this.product.id}: sse transport error: ${errorMessage2(error)}`, "TRANSPORT", { cause: error });
+            throw new LlmError3(`${this.product.id}: sse transport error: ${errorMessage2(error)}`, "TRANSPORT", { cause: error });
           }
           throw error;
         }
@@ -35055,7 +35055,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
             throw contentRejectionError(this.product.id, 200, payload, false);
           }
           if (data.error !== void 0) {
-            throw new LlmError4(`${this.product.id}: ${data.error.message ?? "unknown error"}`, "SERVER");
+            throw new LlmError3(`${this.product.id}: ${data.error.message ?? "unknown error"}`, "SERVER");
           }
           const choice = data.choices?.[0];
           const delta = choice?.delta;
@@ -35279,7 +35279,7 @@ function registerBuddyLlm(ctx, options) {
 // vendor/channel-pack/src/lobsterai-adapter.ts
 import {
   LlmAdapter as LlmAdapter3,
-  LlmError as LlmError5,
+  LlmError as LlmError4,
   ReasoningEffortId as ReasoningEffortId3
 } from "@deepseek-ai/dsh-llm";
 import { ToolCallId as ToolCallId3 } from "@deepseek-ai/dsh-llm";
@@ -35866,7 +35866,7 @@ function errorMessage3(error) {
     return "unknown error";
   }
 }
-var LobsteraiStreamError = class extends LlmError5 {
+var LobsteraiStreamError = class extends LlmError4 {
   constructor(message2, kind, detail, options) {
     super(message2, kind === "hard-credit" ? "QUOTA_EXCEEDED" : "SERVER", options);
     this.kind = kind;
@@ -35880,16 +35880,16 @@ function buildLobsteraiFailure(input) {
   const detail = fromStream ? text : errorDetail3(text);
   if (kind === "hard-credit") {
     const prefix = exhausted ? `lobsterai: \u6A21\u578B ${model} \u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528` : "lobsterai: \u79EF\u5206\u4E0D\u8DB3";
-    return new LlmError5(`${prefix}\uFF08${detail}\uFF09`, "QUOTA_EXCEEDED", { status });
+    return new LlmError4(`${prefix}\uFF08${detail}\uFF09`, "QUOTA_EXCEEDED", { status });
   }
   if (exhausted) {
-    return new LlmError5(
+    return new LlmError4(
       `lobsterai: \u6A21\u578B ${model} \u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528\uFF08${detail}\uFF09`,
       fromStream ? "SERVER" : httpErrorCode3(status),
       { status }
     );
   }
-  return new LlmError5(`lobsterai: ${detail}`, fromStream ? "SERVER" : httpErrorCode3(status), { status });
+  return new LlmError4(`lobsterai: ${detail}`, fromStream ? "SERVER" : httpErrorCode3(status), { status });
 }
 function errorDetail3(body) {
   try {
@@ -36125,13 +36125,13 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(options.model).includes("image")) {
-        throw new LlmError5(
+        throw new LlmError4(
           `lobsterai: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError5("lobsterai: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+        throw new LlmError4("lobsterai: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       const readImage = this.options.readImage;
@@ -36152,7 +36152,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError5("lobsterai: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError4("lobsterai: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     let currentAccountId = "";
     if (this.options.accountPool) {
@@ -36197,7 +36197,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
       await this.options.refresh();
       const refreshed = await this.options.resolveCredential(options.model);
       if (refreshed === void 0 || refreshed.access_token.length === 0) {
-        throw new LlmError5("lobsterai: credential expired and refresh failed", "AUTH", { status: response.status });
+        throw new LlmError4("lobsterai: credential expired and refresh failed", "AUTH", { status: response.status });
       }
       credential = refreshed;
       response = await this.send(credential, body, options);
@@ -36298,7 +36298,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
     } catch (error) {
       if (options.signal?.aborted) throw error;
       if (isTransportError3(error)) {
-        throw new LlmError5(`lobsterai: transport error: ${errorMessage3(error)}`, "TRANSPORT", { cause: error });
+        throw new LlmError4(`lobsterai: transport error: ${errorMessage3(error)}`, "TRANSPORT", { cause: error });
       }
       throw error;
     }
@@ -36319,7 +36319,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
    *   `max-tokens`，否则 harness 会执行残缺 JSON 参数并污染会话历史。
    */
   async *consumeSse(response, options) {
-    if (!response.body) throw new LlmError5("lobsterai: empty model response body", "EMPTY_RESPONSE");
+    if (!response.body) throw new LlmError4("lobsterai: empty model response body", "EMPTY_RESPONSE");
     const blocks = [];
     let nextIndex = 0;
     const loopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
@@ -36348,9 +36348,9 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
           if (!result.done) firstTokenReceived = true;
         } catch (error) {
           if (options.signal?.aborted) throw error;
-          if (error instanceof LlmError5) throw error;
+          if (error instanceof LlmError4) throw error;
           if (isTransportError3(error)) {
-            throw new LlmError5(`lobsterai: sse transport error: ${errorMessage3(error)}`, "TRANSPORT", { cause: error });
+            throw new LlmError4(`lobsterai: sse transport error: ${errorMessage3(error)}`, "TRANSPORT", { cause: error });
           }
           throw error;
         }
@@ -36569,7 +36569,7 @@ function buildLobsteraiModelsUrl(product, credential, clientVersion) {
 }
 
 // vendor/channel-pack/src/qoder-adapter.ts
-import { LlmAdapter as LlmAdapter4, LlmError as LlmError8, ReasoningEffortId as ReasoningEffortId4 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter4, LlmError as LlmError7, ReasoningEffortId as ReasoningEffortId4 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/qoder.ts
 import { createHash as createHash2, randomUUID, randomBytes } from "node:crypto";
@@ -37081,7 +37081,7 @@ var QoderEncryptedInfer = class _QoderEncryptedInfer {
 };
 
 // vendor/channel-pack/src/qoder-envelope.ts
-import { LlmError as LlmError6 } from "@deepseek-ai/dsh-llm";
+import { LlmError as LlmError5 } from "@deepseek-ai/dsh-llm";
 function innerTextOf(payload) {
   let envelope;
   try {
@@ -37115,7 +37115,7 @@ function classifyInner(inner) {
 function unwrapQoderEnvelopeStream(response, label) {
   const upstream = response.body;
   if (upstream === null) {
-    throw new LlmError6(`${label}: \u54CD\u5E94\u6CA1\u6709 body`, "SERVER");
+    throw new LlmError5(`${label}: \u54CD\u5E94\u6CA1\u6709 body`, "SERVER");
   }
   const decoder2 = new TextDecoder("utf-8");
   const encoder2 = new TextEncoder();
@@ -37497,7 +37497,7 @@ function qoderProductById(id) {
 }
 
 // vendor/channel-pack/src/openai-compat.ts
-import { LlmError as LlmError7, ToolCallId as ToolCallId4 } from "@deepseek-ai/dsh-llm";
+import { LlmError as LlmError6, ToolCallId as ToolCallId4 } from "@deepseek-ai/dsh-llm";
 function contentToText4(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -37653,7 +37653,7 @@ function httpErrorCode4(status) {
   if (status >= 500) return "SERVER";
   return `HTTP_${status}`;
 }
-var ModelQueuedError = class extends LlmError7 {
+var ModelQueuedError = class extends LlmError6 {
   /** 解析出的排队信息（`isQueued` / `serviceAvailable` / `waitTime` 等）。 */
   queueInfo;
   /** 服务端要求的等待时长（毫秒）；无法解析时为 undefined。 */
@@ -37677,7 +37677,7 @@ function isTransportError4(error) {
 var RAW_SNIPPET_LIMIT = 400;
 async function* consumeOpenAiSse(response, options, config) {
   const { label } = config;
-  if (!response.body) throw new LlmError7(`${label}: empty model response body`, "EMPTY_RESPONSE");
+  if (!response.body) throw new LlmError6(`${label}: empty model response body`, "EMPTY_RESPONSE");
   const blocks = [];
   let nextIndex = 0;
   const loopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
@@ -37708,9 +37708,9 @@ async function* consumeOpenAiSse(response, options, config) {
         if (!result.done) firstTokenReceived = true;
       } catch (error) {
         if (options.signal?.aborted) throw error;
-        if (error instanceof LlmError7) throw error;
+        if (error instanceof LlmError6) throw error;
         if (isTransportError4(error)) {
-          throw new LlmError7(`${label}: sse transport error: ${errorMessage4(error)}`, "TRANSPORT", { cause: error });
+          throw new LlmError6(`${label}: sse transport error: ${errorMessage4(error)}`, "TRANSPORT", { cause: error });
         }
         throw error;
       }
@@ -37744,7 +37744,7 @@ async function* consumeOpenAiSse(response, options, config) {
           }
         }
         if (data.error !== void 0) {
-          throw new LlmError7(`${label}: ${data.error.message ?? "unknown error"}`, "SERVER");
+          throw new LlmError6(`${label}: ${data.error.message ?? "unknown error"}`, "SERVER");
         }
         if (data.choices === void 0 && data.code !== void 0 && typeof data.message === "string") {
           const queueInfo = parseQueueError(data.message);
@@ -37759,14 +37759,14 @@ async function* consumeOpenAiSse(response, options, config) {
             );
           }
           if (isBillingBusinessCode(data.code) || looksLikeBillingError(data.message)) {
-            throw new LlmError7(
+            throw new LlmError6(
               `${label}: ${data.message}`,
               "QUOTA_EXCEEDED",
               { ...typeof data.code === "number" ? { status: data.code } : {} }
             );
           }
           const detail = [String(data.code), data.type].filter(Boolean).join("/");
-          throw new LlmError7(
+          throw new LlmError6(
             `${label}: ${data.message}${detail.length > 0 ? ` (${detail})` : ""}`,
             "SERVER"
           );
@@ -37787,12 +37787,12 @@ async function* consumeOpenAiSse(response, options, config) {
               );
             }
             if (looksLikeBillingError(data.message)) {
-              throw new LlmError7(`${label}: ${data.message}`, "QUOTA_EXCEEDED", {
+              throw new LlmError6(`${label}: ${data.message}`, "QUOTA_EXCEEDED", {
                 ...status === void 0 ? {} : { status }
               });
             }
             const suffix = status === void 0 ? "" : ` (status=${status})`;
-            throw new LlmError7(`${label}: ${data.message}${suffix}`, "SERVER", {
+            throw new LlmError6(`${label}: ${data.message}${suffix}`, "SERVER", {
               ...status === void 0 ? {} : { status }
             });
           }
@@ -37965,7 +37965,7 @@ async function* consumeOpenAiSse(response, options, config) {
   if (!sawDataFrame) {
     const snippet = rawSnippet.trim();
     if (snippet.length > 0) {
-      throw new LlmError7(
+      throw new LlmError6(
         `${label}: \u54CD\u5E94\u4E0D\u662F SSE\uFF08\u6CA1\u6709\u4EFB\u4F55 data: \u5E27\uFF09\uFF0C\u539F\u6587\u7247\u6BB5\uFF1A${snippet}`,
         "SERVER"
       );
@@ -37986,11 +37986,11 @@ async function* consumeOpenAiSse(response, options, config) {
 var parseQoderQueueError = parseQueueError;
 var qoderQueueDelayMs = queueDelayMs;
 function isQuotaExceededError2(error) {
-  if (error instanceof LlmError8) {
+  if (error instanceof LlmError7) {
     if (error.code === "QUOTA_EXCEEDED" || error.code === "QUOTA") return true;
   }
   if (error instanceof Error) {
-    if (!(error instanceof LlmError8)) return looksLikeBillingError(error.message);
+    if (!(error instanceof LlmError7)) return looksLikeBillingError(error.message);
   }
   return false;
 }
@@ -38243,13 +38243,13 @@ var QoderAdapter = class extends LlmAdapter4 {
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(options.model).includes("image")) {
-        throw new LlmError8(
+        throw new LlmError7(
           `qoder: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError8("qoder: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+        throw new LlmError7("qoder: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       const readImage = this.options.readImage;
@@ -38270,7 +38270,7 @@ var QoderAdapter = class extends LlmAdapter4 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError8("qoder: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError7("qoder: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     credential = await this.ensureUid(credential);
     const messages = serializeMessages4(options.messages, imageUrls);
@@ -38346,19 +38346,19 @@ var QoderAdapter = class extends LlmAdapter4 {
             authRefreshed = false;
             continue;
           }
-          throw new LlmError8(`qoder: ${errorDetail4(errorText)}`, "QUOTA_EXCEEDED", { status: response.status });
+          throw new LlmError7(`qoder: ${errorDetail4(errorText)}`, "QUOTA_EXCEEDED", { status: response.status });
         }
         if (!authRefreshed) {
           authRefreshed = true;
           await this.options.refresh();
           const refreshed = await this.options.resolveCredential(options.model);
           if (refreshed === void 0 || refreshed.access_token.length === 0) {
-            throw new LlmError8("qoder: credential expired and refresh failed", "AUTH", { status: response.status });
+            throw new LlmError7("qoder: credential expired and refresh failed", "AUTH", { status: response.status });
           }
           credential = await this.ensureUid(refreshed);
           continue;
         }
-        throw new LlmError8(`qoder: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
+        throw new LlmError7(`qoder: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
       }
       if (!response.ok && response.status === 409 && !duplicateRetried) {
         duplicateRetried = true;
@@ -38366,7 +38366,7 @@ var QoderAdapter = class extends LlmAdapter4 {
       }
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
-        throw new LlmError8(`qoder: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
+        throw new LlmError7(`qoder: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
       }
       const inner = consumeOpenAiSse(
         unwrapQoderEnvelopeStream(response, "qoder"),
@@ -38454,21 +38454,21 @@ var QoderAdapter = class extends LlmAdapter4 {
    */
   async waitForQueue(queueInfo, attempts, deadline, options) {
     if (Date.now() >= deadline) {
-      throw new LlmError8("qoder: \u6392\u961F\u7B49\u5F85\u8D85\u65F6", "QUEUE");
+      throw new LlmError7("qoder: \u6392\u961F\u7B49\u5F85\u8D85\u65F6", "QUEUE");
     }
     if (attempts > QUEUE_MAX_ATTEMPTS) {
-      throw new LlmError8(
+      throw new LlmError7(
         `qoder: \u6392\u961F\u91CD\u8BD5\u8D85\u8FC7\u4E0A\u9650\uFF08${QUEUE_MAX_ATTEMPTS} \u6B21\uFF09`,
         "QUEUE"
       );
     }
     if (options.signal?.aborted === true) {
-      throw new LlmError8("qoder: \u6392\u961F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "QUEUE");
+      throw new LlmError7("qoder: \u6392\u961F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "QUEUE");
     }
     const waitMs = qoderQueueDelayMs(queueInfo);
     await this.sleep(waitMs ?? 1e3, options.signal);
     if (isAborted(options.signal)) {
-      throw new LlmError8("qoder: \u6392\u961F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "QUEUE");
+      throw new LlmError7("qoder: \u6392\u961F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "QUEUE");
     }
   }
   /**
@@ -38482,7 +38482,7 @@ var QoderAdapter = class extends LlmAdapter4 {
     if (credential.uid !== void 0 && credential.uid.length > 0) return credential;
     const patched = await this.options.resolveUid?.(credential);
     if (patched?.uid !== void 0 && patched.uid.length > 0) return patched;
-    throw new LlmError8(
+    throw new LlmError7(
       "qoder: \u51ED\u636E\u7F3A\u5C11 uid\uFF0C\u52A0\u5BC6\u63A8\u7406\u65E0\u6CD5\u7B7E\u540D\uFF08\u8BF7\u91CD\u65B0\u767B\u5F55\u8BE5\u8D26\u53F7\uFF09",
       "MISSING_CREDENTIAL"
     );
@@ -38501,7 +38501,7 @@ var QoderAdapter = class extends LlmAdapter4 {
     } catch (error) {
       if (options.signal?.aborted) throw error;
       if (isTransportError4(error)) {
-        throw new LlmError8(
+        throw new LlmError7(
           `qoder: transport error: ${error instanceof Error ? error.message : String(error)}`,
           "TRANSPORT",
           { cause: error }
@@ -38550,7 +38550,8 @@ function registerQoderLlm(ctx, options) {
 }
 
 // vendor/channel-pack/src/trae-adapter.ts
-import { LlmAdapter as LlmAdapter5, LlmError as LlmError9, ReasoningEffortId as ReasoningEffortId5 } from "@deepseek-ai/dsh-llm";
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { LlmAdapter as LlmAdapter5, LlmError as LlmError8, ReasoningEffortId as ReasoningEffortId5 } from "@deepseek-ai/dsh-llm";
 import { ToolCallId as ToolCallId5 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/reasoning-ladder.ts
@@ -38622,7 +38623,7 @@ function canonicalReasoningEffortFor(effort) {
 }
 
 // vendor/channel-pack/src/trae.ts
-import { createCipheriv, createHash as createHash3, randomBytes as randomBytes2 } from "node:crypto";
+import { createHash as createHash3, randomUUID as randomUUID2 } from "node:crypto";
 
 // vendor/channel-pack/src/trae-product.ts
 var TRAE_AGENT_HOST = "https://trae-api-cn.mchost.guru";
@@ -38745,7 +38746,7 @@ function traeCheckinClaimPathFor(_product) {
   return "/trae/api/v2/ug/checkin_credits/claim";
 }
 function traeChatPathFor(product) {
-  return product.id === "trae_intl" ? "/api/ide/v1/llm_raw_chat" : "/api/agent/v3/llm_utils_chat";
+  return "/api/agent/v3/llm_utils_chat";
 }
 function traeBatchModelsPathFor(product) {
   return product.id === "trae_intl" ? "/api/ide/v1/model_list" : "/api/ide/v1/batch_get_detail_param";
@@ -38765,22 +38766,26 @@ var TRAE_INTL_FALLBACK_MODELS = [
   { id: "MiniMax-M2.7", name: "MiniMax-M2.7", contextWindow: 112e3 }
 ];
 var TRAE_INTL_CHANNELS = resolveChannelList(
-  process.env.DSH_TRAE_CHANNELS
+  process.env.DSH_TRAE_CHANNELS,
+  ["inline_chat"]
 );
 var TRAE_INTL = {
   id: "trae_intl",
   displayName: "Trae (\u56FD\u9645\u7248)",
-  agentHost: "https://coresg-normal.trae.ai",
+  agentHost: "https://a0ai-api-sg.byteintlapi.com",
+  agentHostFallbacks: ["https://trae-api-sg.mchost.guru"],
   ugHost: "https://growsg-normal.trae.ai",
   oauthHost: "https://growsg-normal.trae.ai",
   consoleHost: "https://www.trae.ai",
   clientId: "ono9krqynydwx5",
   appId: "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8",
-  ideVersion: "3.5.87",
-  ideVersionCode: "20251013",
+  ideVersion: "3.3.67",
+  ideVersionCode: "20260401",
   deviceBrand: "Apple",
   osVersion: "macOS 15.7.4",
-  function: "solo_agent",
+  // ✅ 实测：国际版 Pro appId 只注册了 `inline_chat` 一个 function
+  // （其余 17 个候选全部 `2001 no function config found`）。
+  function: "inline_chat",
   channels: TRAE_INTL_CHANNELS,
   fallbackMaxOutputTokens: 32e3,
   maxMode: resolveMaxModeFlag(process.env.DSH_TRAE_MAX_MODE),
@@ -38829,6 +38834,27 @@ function isTraeRefreshable(credential) {
   return typeof credential.refresh_token === "string" && credential.refresh_token.length > 0;
 }
 function traeSOLOHeaders(credential, product, stream, machineIdGeneration = 0) {
+  const machineId = deriveRotatingMachineId(credential.machine_id, machineIdGeneration);
+  if (product.id === "trae_intl") {
+    const headers2 = {
+      "Content-Type": "application/json",
+      Accept: stream ? "text/event-stream" : "application/json",
+      Authorization: `Cloud-IDE-JWT ${credential.access_token}`,
+      "X-Cloudide-Token": credential.access_token,
+      "x-uid": credential.uid,
+      "x-app-id": product.appId,
+      "x-request-id": randomUUID2(),
+      "x-ide-version": product.ideVersion,
+      "x-ide-version-code": product.ideVersionCode,
+      "x-device-type": "windows",
+      "x-os-version": "Windows 10"
+    };
+    if (machineId.length > 0) {
+      headers2["x-machine-id"] = machineId;
+      headers2["x-device-id"] = createHash3("sha256").update(machineId).digest("hex").slice(0, 32);
+    }
+    return headers2;
+  }
   const headers = {
     "Content-Type": "application/json",
     Accept: stream ? "text/event-stream" : "application/json",
@@ -38848,8 +38874,8 @@ function traeSOLOHeaders(credential, product, stream, machineIdGeneration = 0) {
     "X-Device-Brand": product.deviceBrand,
     "Request-Traffic-Type": "prod"
   };
-  if (credential.machine_id.length > 0) {
-    headers["X-Machine-Id"] = deriveRotatingMachineId(credential.machine_id, machineIdGeneration);
+  if (machineId.length > 0) {
+    headers["X-Machine-Id"] = machineId;
   }
   if (credential.device_id.length > 0) {
     headers["X-Device-Id"] = credential.device_id;
@@ -39262,38 +39288,6 @@ function parseTraeBatchModelList(body, channelPriority = TRAE_CHANNELS) {
     }
   }
   return [...byId.values()];
-}
-var TRAE_ENVELOPE_KEY_HEX = "6195f24ca4d430f8a4833de7db8dac37d148a084e7464a351ffa68585c16b955";
-function sealTraeEnvelope(plaintext) {
-  const key = Buffer.from(TRAE_ENVELOPE_KEY_HEX, "hex");
-  const requestAt = Math.floor(Date.now() / 1e3);
-  const pin = randomBytes2(8);
-  for (let i = 0; i < 8; i++) key[i] ^= pin[i];
-  const iv = randomBytes2(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-  cipher.setAAD(Buffer.from(String(requestAt)));
-  const ciphertext = Buffer.concat([cipher.update(typeof plaintext === "string" ? Buffer.from(plaintext) : plaintext), cipher.final()]);
-  return {
-    message: Buffer.concat([iv, ciphertext, cipher.getAuthTag()]).toString("base64"),
-    requestPin: pin.toString("hex"),
-    requestAt
-  };
-}
-async function fetchTraeChatJwt(credential, product, fetcher) {
-  const response = await fetcher(`${product.ugHost}/cloudide/api/v3/trae/GenerateTempToken`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-cloudide-token": credential.access_token
-    },
-    body: JSON.stringify({ IDEVersion: product.ideVersion }),
-    signal: AbortSignal.timeout(TRAE_REQUEST_TIMEOUT_MS)
-  });
-  if (!response.ok) throw new LlmError(`trae: GenerateTempToken HTTP ${response.status}`, "AUTH", { status: response.status });
-  const body = await response.json();
-  const token = readStringField3(body.Result ?? {}, "Token");
-  if (token.length === 0) throw new LlmError("trae: GenerateTempToken returned no token", "AUTH");
-  return token;
 }
 function parseTraeIntlModelList(body) {
   if (typeof body !== "object" || body === null) return [];
@@ -40151,7 +40145,7 @@ var TraeAdapter = class extends LlmAdapter5 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError9("trae: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError8("trae: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     let currentAccountId = "";
     if (this.options.accountPool) {
@@ -40171,13 +40165,13 @@ var TraeAdapter = class extends LlmAdapter5 {
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(options.model).includes("image")) {
-        throw new LlmError9(
+        throw new LlmError8(
           `trae: model "${options.model}" does not accept image input.`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError9(
+        throw new LlmError8(
           "trae: image input requires the attachment service; confirm the profile loads @deepseek-ai/dsh-attachment-local.",
           "UNSUPPORTED_CONTENT"
         );
@@ -40231,7 +40225,7 @@ var TraeAdapter = class extends LlmAdapter5 {
     const bodyObj = transformToSOLOBody(openaiBody, void 0, this.channelFor(options.model));
     const body = JSON.stringify(bodyObj);
     const intlMessages = this.product.id === "trae_intl" ? openaiBody.messages : void 0;
-    const prepare = intlMessages !== void 0 ? (c) => this.prepareIntlRequest(c, options.model, intlMessages) : (c) => Promise.resolve({
+    const prepare = intlMessages !== void 0 ? (c) => this.prepareIntlRequest(c, options.model, intlMessages, openaiBody) : (c) => Promise.resolve({
       body,
       headers: traeSOLOHeaders(c, this.product, true, this.machineIdGeneration())
     });
@@ -40240,7 +40234,7 @@ var TraeAdapter = class extends LlmAdapter5 {
       await this.options.refresh();
       const refreshed = await this.options.resolveCredential(options.model);
       if (refreshed === void 0 || refreshed.access_token.length === 0) {
-        throw new LlmError9("trae: credential expired and refresh failed", "AUTH", { status: response.status });
+        throw new LlmError8("trae: credential expired and refresh failed", "AUTH", { status: response.status });
       }
       credential = refreshed;
       response = await this.send(credential, prepare, options);
@@ -40280,16 +40274,16 @@ var TraeAdapter = class extends LlmAdapter5 {
           lastKind = classifyTraeError(response.status, errorText);
           if (!shouldRotateTraeAccount(lastKind)) break;
         }
-        throw new LlmError9(
+        throw new LlmError8(
           `trae: \u6A21\u578B ${options.model} \u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528\uFF08${errorDetail5(errorText)}\uFF09`,
           lastKind === "quota-exceeded" ? "QUOTA_EXCEEDED" : httpErrorCode5(lastStatus),
           { status: lastStatus }
         );
       }
       if (lastKind === "quota-exceeded") {
-        throw new LlmError9(`trae: \u79EF\u5206\u4E0D\u8DB3\uFF08${errorDetail5(errorText)}\uFF09`, "QUOTA_EXCEEDED", { status: lastStatus });
+        throw new LlmError8(`trae: \u79EF\u5206\u4E0D\u8DB3\uFF08${errorDetail5(errorText)}\uFF09`, "QUOTA_EXCEEDED", { status: lastStatus });
       }
-      throw new LlmError9(`trae: ${errorDetail5(errorText)}`, httpErrorCode5(lastStatus), { status: lastStatus });
+      throw new LlmError8(`trae: ${errorDetail5(errorText)}`, httpErrorCode5(lastStatus), { status: lastStatus });
     }
     const triedStreamAccounts = /* @__PURE__ */ new Set();
     if (currentAccountId.length > 0) triedStreamAccounts.add(currentAccountId);
@@ -40299,9 +40293,9 @@ var TraeAdapter = class extends LlmAdapter5 {
         yield* this.consumeSse(response, options);
         return;
       } catch (error) {
-        if (error instanceof LlmError9 && error.code === TRAE_ROTATABLE_STREAM_ERROR) {
+        if (error instanceof LlmError8 && error.code === TRAE_ROTATABLE_STREAM_ERROR) {
           if (this.options.accountPool === void 0 || rotateBudget <= 0) {
-            throw new LlmError9(error.message, "QUOTA_EXCEEDED");
+            throw new LlmError8(error.message, "QUOTA_EXCEEDED");
           }
           if (options.signal?.aborted) throw error;
           rotateBudget -= 1;
@@ -40318,7 +40312,7 @@ var TraeAdapter = class extends LlmAdapter5 {
             triedStreamAccounts
           );
           if (next === null || next === void 0 || triedStreamAccounts.has(next.entry.id)) {
-            throw new LlmError9(error.message, "QUOTA_EXCEEDED");
+            throw new LlmError8(error.message, "QUOTA_EXCEEDED");
           }
           triedStreamAccounts.add(next.entry.id);
           credential = next.credential;
@@ -40328,56 +40322,76 @@ var TraeAdapter = class extends LlmAdapter5 {
             const text = await response.text().catch(() => "");
             const kind = classifyTraeError(response.status, text);
             if (!shouldRotateTraeAccount(kind)) {
-              throw new LlmError9(`trae: ${errorDetail5(text)}`, httpErrorCode5(response.status), { status: response.status });
+              throw new LlmError8(`trae: ${errorDetail5(text)}`, httpErrorCode5(response.status), { status: response.status });
             }
             continue;
           }
           continue;
         }
-        const empty = error instanceof LlmError9 && error.message.includes("upstream returned no events");
+        const empty = error instanceof LlmError8 && error.message.includes("upstream returned no events");
         if (!empty || attempt >= 1) throw error;
         if (options.signal?.aborted) throw error;
         response = await this.send(credential, prepare, options);
         if (!response.ok) {
           const text = await response.text().catch(() => "");
-          throw new LlmError9(`trae: ${errorDetail5(text)}`, httpErrorCode5(response.status), { status: response.status });
+          throw new LlmError8(`trae: ${errorDetail5(text)}`, httpErrorCode5(response.status), { status: response.status });
         }
       }
     }
   }
-  /** 发起一次 chat 请求；网络失败映射为可重试的 TRANSPORT 错误。 */
+  /**
+   * 发起一次 chat 请求；网络失败映射为可重试的 TRANSPORT 错误。
+   *
+   * 主机故障转移：主 `agentHost` 连接层失败（DNS/TCP/超时，非 HTTP 4xx/5xx）
+   * 时按 `agentHostFallbacks` 顺序换机重试一次。国际版实测
+   * `a0ai-api-sg.byteintlapi.com` 与 `trae-api-sg.mchost.guru` 对同一请求
+   * 都回 200 且 `session_id` 一致 —— 同一后端两个入口。
+   */
   async send(credential, prepare, options) {
     this.sendCount += 1;
-    try {
-      const prepared = await prepare(credential);
-      return await this.fetchImpl(`${this.product.agentHost}${traeChatPathFor(this.product)}`, {
-        method: "POST",
-        headers: new Headers(prepared.headers),
-        body: prepared.body,
-        signal: options.signal
-      });
-    } catch (error) {
-      if (options.signal?.aborted) throw error;
-      if (isTransportError5(error)) {
-        throw new LlmError9(`trae: transport error: ${errorMessage5(error)}`, "TRANSPORT", { cause: error });
+    const path2 = traeChatPathFor(this.product);
+    const hosts = [this.product.agentHost, ...this.product.agentHostFallbacks ?? []];
+    let lastError;
+    for (const [index, host] of hosts.entries()) {
+      try {
+        const prepared = await prepare(credential);
+        return await this.fetchImpl(`${host}${path2}`, {
+          method: "POST",
+          headers: new Headers(prepared.headers),
+          body: prepared.body,
+          signal: options.signal
+        });
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
+        if (!isTransportError5(error) || index === hosts.length - 1) throw error;
+        lastError = error;
       }
-      throw error;
     }
+    throw new LlmError8(`trae: transport error: ${errorMessage5(lastError)}`, "TRANSPORT", { cause: lastError });
   }
   /**
-   * 构造国际版 `llm_raw_chat` 的请求（CN 不走这里）。
+   * 构造国际版 `inline_chat` 的请求（CN 不走这里）。
    *
-   * 协议逐项还原自 `aiserver/server.js` deob 偏移 11871652 的 `ASe.llmRawChat`：
-   * 1. messages 映射为 `{role, content:[{type:'text', text}]}`（**字符串 content
-   *    必须包成单元素数组**，客户端就是这么做的）；
-   * 2. `sealTraeEnvelope(JSON.stringify(msgs))` 得到 `message` / `requestPin` / `requestAt`；
-   * 3. body = `{model_name, message}`（**只有这两个字段**，没有 stream / temperature）；
-   * 4. 头 = SOLO 头 + `{get-svc: 1, X-Request-Pin, X-Requested-At}`，
-   *    并把 `Authorization` 换成临时 JWT。
+   * 协议（`Wang-JQ77/dsh-trae-api` 的 `trae-client.js` buildChatBody，
+   * 并经本机真实凭据逐项验证 —— 见 `FORK-NOTES.md`「回滚与重写记录」）：
    *
-   * ⚠️ 每次调用都要重新取 JWT 并重新封信封 —— pin 复用会被 `4120` 防重放拒绝。
+   * ```json
+   * {"messages":[{"role":"user","content":[{"type":"text","text":"…"}]}],
+   *  "model":"glm-5.2","function":"inline_chat","stream":true,
+   *  "request_id":"<uuid>","session_id":"<uuid>"}
+   * ```
+   *
+   * 关键点：
+   * - **裸 JSON，没有信封** —— `llm_raw_chat` 的 AES-256-GCM 是 SOLO 后端专属。
+   * - `request_id` 与 `session_id` 用**同一个**随机 UUID。
+   * - `function` 必须是 `inline_chat`；该 appId 下其余 17 个候选全部
+   *   `2001 no function config found for appId=…, function=<f>`。
+   * - 认证 = OAuth `access_token` 同时进 `Authorization: Cloud-IDE-JWT` 和
+   *   `X-Cloudide-Token`（由 {@link traeSOLOHeaders} 处理），**不需要** JWT 交换。
+   * - OpenAI 的 `temperature` / `max_tokens` / `tools` / `reasoning_effort`
+   *   一并透传 —— 实测服务端接受并忽略不影响返回，故保留以便将来上游支持。
    */
-  async prepareIntlRequest(credential, modelName, messages) {
+  async prepareIntlRequest(credential, modelName, messages, extra) {
     const wire = messages.map((m) => {
       const message2 = m;
       const text = typeof message2.content === "string" ? message2.content : JSON.stringify(message2.content ?? "");
@@ -40388,14 +40402,21 @@ var TraeAdapter = class extends LlmAdapter5 {
       if (message2.name !== void 0 && message2.role === "tool") item.name = message2.name;
       return item;
     });
-    const envelope = sealTraeEnvelope(Buffer.from(JSON.stringify(wire)));
+    const sessionId = randomUUID3();
     const headers = traeSOLOHeaders(credential, this.product, true, this.machineIdGeneration());
-    headers.Authorization = `Cloud-IDE-JWT ${await fetchTraeChatJwt(credential, this.product, this.fetchImpl)}`;
-    headers["get-svc"] = "1";
-    headers["X-Request-Pin"] = envelope.requestPin;
-    headers["X-Requested-At"] = String(envelope.requestAt);
     return {
-      body: JSON.stringify({ model_name: modelName, message: envelope.message }),
+      body: JSON.stringify({
+        // `extra` 是 OpenAI 形状的 body（含 temperature / max_tokens / tools /
+        // reasoning_effort）。**先展开它**，再用国际版协议要求的字段覆盖 ——
+        // 顺序反了会让 `extra.messages`（DSH 原生形状）盖掉规范化后的 wire。
+        ...extra,
+        messages: wire,
+        model: modelName,
+        function: this.product.function,
+        stream: true,
+        request_id: sessionId,
+        session_id: sessionId
+      }),
       headers
     };
   }
@@ -40432,7 +40453,7 @@ var TraeAdapter = class extends LlmAdapter5 {
    * ```
    */
   async *consumeSse(response, options) {
-    if (!response.body) throw new LlmError9("trae: empty model response body", "EMPTY_RESPONSE");
+    if (!response.body) throw new LlmError8("trae: empty model response body", "EMPTY_RESPONSE");
     const blocks = [];
     let nextIndex = 0;
     const loopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
@@ -40464,9 +40485,9 @@ var TraeAdapter = class extends LlmAdapter5 {
           if (!result.done) firstTokenReceived = true;
         } catch (error) {
           if (options.signal?.aborted) throw error;
-          if (error instanceof LlmError9) throw error;
+          if (error instanceof LlmError8) throw error;
           if (isTransportError5(error)) {
-            throw new LlmError9(`trae: sse transport error: ${errorMessage5(error)}`, "TRANSPORT", { cause: error });
+            throw new LlmError8(`trae: sse transport error: ${errorMessage5(error)}`, "TRANSPORT", { cause: error });
           }
           throw error;
         }
@@ -40601,9 +40622,9 @@ var TraeAdapter = class extends LlmAdapter5 {
                   if (ev.errorCode !== void 0 && ev.errorMessage !== void 0) {
                     const message2 = traeStreamErrorMessage(ev.errorCode, ev.errorMessage, options.model);
                     if (isRotatableStreamError(ev.errorCode) && !gotAnyContent) {
-                      throw new LlmError9(message2, TRAE_ROTATABLE_STREAM_ERROR);
+                      throw new LlmError8(message2, TRAE_ROTATABLE_STREAM_ERROR);
                     }
-                    throw new LlmError9(
+                    throw new LlmError8(
                       message2,
                       ev.errorCode === 1005 || ev.errorCode === 4008 ? "QUOTA_EXCEEDED" : "SERVER"
                     );
@@ -40631,7 +40652,7 @@ var TraeAdapter = class extends LlmAdapter5 {
       reader.releaseLock();
     }
     if (!sawAnyUpstreamEvent) {
-      throw new LlmError9(
+      throw new LlmError8(
         "trae: upstream returned no events (empty response before first model event)",
         "TRANSPORT"
       );
@@ -40710,7 +40731,7 @@ function registerTraeLlm(ctx, options) {
 }
 
 // vendor/channel-pack/src/cline-adapter.ts
-import { LlmAdapter as LlmAdapter6, LlmError as LlmError10, ReasoningEffortId as ReasoningEffortId6 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter6, LlmError as LlmError9, ReasoningEffortId as ReasoningEffortId6 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/retry-after.ts
 function parseRetryAfterMs(raw, nowMs = Date.now()) {
@@ -41634,13 +41655,13 @@ var ClineAdapter = class extends LlmAdapter6 {
     if (imageRefs.size > 0) {
       await this.ensureRemoteModels();
       if (!this.inputModalitiesFor(options.model).includes("image")) {
-        throw new LlmError10(
+        throw new LlmError9(
           `cline: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError10("cline: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+        throw new LlmError9("cline: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       const readImage = this.options.readImage;
@@ -41661,7 +41682,7 @@ var ClineAdapter = class extends LlmAdapter6 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError10("cline: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError9("cline: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     const messages = serializeMessages4(options.messages, imageUrls);
     const bodyObj = {
@@ -41695,7 +41716,7 @@ var ClineAdapter = class extends LlmAdapter6 {
     if (!response.ok && (response.status === 401 || response.status === 403)) {
       const forbiddenText = await response.text().catch(() => "");
       if (isClineRegionForbidden(response.status, forbiddenText)) {
-        throw new LlmError10(
+        throw new LlmError9(
           `cline: ${errorDetail4(forbiddenText)}`,
           "PERMISSION_DENIED",
           { status: response.status }
@@ -41704,7 +41725,7 @@ var ClineAdapter = class extends LlmAdapter6 {
       await this.options.refresh();
       const refreshed = await this.options.resolveCredential(options.model);
       if (refreshed === void 0 || refreshed.access_token.length === 0) {
-        throw new LlmError10("cline: credential expired and refresh failed", "AUTH", { status: response.status });
+        throw new LlmError9("cline: credential expired and refresh failed", "AUTH", { status: response.status });
       }
       credential = refreshed;
       response = await this.send(credential, body, options);
@@ -41758,12 +41779,12 @@ var ClineAdapter = class extends LlmAdapter6 {
           hint,
           recordsClineRateLimit(response.status, errorText) ? clineRateLimitResetAt(response, errorText, options.model) : void 0
         );
-        throw new LlmError10(
+        throw new LlmError9(
           `cline: \u6A21\u578B ${options.model} \u7684\u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528 \u2014\u2014 ${advice}`,
           "QUOTA_EXCEEDED"
         );
       }
-      throw new LlmError10(
+      throw new LlmError9(
         `cline: ${errorDetail4(errorText)}`,
         httpErrorCode4(response.status),
         { status: response.status }
@@ -41893,7 +41914,7 @@ var ClineAdapter = class extends LlmAdapter6 {
     } catch (error) {
       if (options.signal?.aborted === true) throw error;
       if (isTransportError4(error)) {
-        throw new LlmError10(
+        throw new LlmError9(
           `cline: transport error: ${error instanceof Error ? error.message : String(error)}`,
           "TRANSPORT",
           { cause: error }
@@ -41942,7 +41963,7 @@ function registerClineLlm(ctx, options) {
 }
 
 // vendor/channel-pack/src/loomy-adapter.ts
-import { LlmAdapter as LlmAdapter7, LlmError as LlmError11, ReasoningEffortId as ReasoningEffortId7 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter7, LlmError as LlmError10, ReasoningEffortId as ReasoningEffortId7 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/loomy.ts
 var LOOMY_API_BASE = "https://loomyad.xunfei.cn/api/v1";
@@ -42253,10 +42274,10 @@ var LoomyAdapter = class extends LlmAdapter7 {
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(entry).includes("image")) {
-        throw new LlmError11(`loomy: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`, "UNSUPPORTED_CONTENT");
+        throw new LlmError10(`loomy: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`, "UNSUPPORTED_CONTENT");
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError11("loomy: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+        throw new LlmError10("loomy: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       for (const [id, ref] of imageRefs) {
@@ -42271,7 +42292,7 @@ var LoomyAdapter = class extends LlmAdapter7 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError11("loomy: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError10("loomy: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     const messages = serializeMessages4(options.messages, imageUrls);
     const wireMessages = options.system !== void 0 && options.system.length > 0 ? [{ role: "system", content: options.system }, ...messages] : messages;
@@ -42308,7 +42329,7 @@ var LoomyAdapter = class extends LlmAdapter7 {
       } catch (error) {
         if (options.signal?.aborted) throw error;
         if (isTransportError4(error)) {
-          throw new LlmError11(
+          throw new LlmError10(
             `loomy: transport error: ${error instanceof Error ? error.message : String(error)}`,
             "TRANSPORT",
             { cause: error }
@@ -42322,13 +42343,13 @@ var LoomyAdapter = class extends LlmAdapter7 {
       await this.options.refresh();
       const refreshed = await this.options.resolveCredential(options.model);
       if (refreshed === void 0 || refreshed.access_token.length === 0) {
-        throw new LlmError11("loomy: credential expired and refresh failed", "AUTH", { status: response.status });
+        throw new LlmError10("loomy: credential expired and refresh failed", "AUTH", { status: response.status });
       }
       response = await send(refreshed.access_token);
     }
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
-      throw new LlmError11(`loomy: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
+      throw new LlmError10(`loomy: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
     }
     yield* consumeOpenAiSse(response, { signal: options.signal }, {
       label: "loomy",
@@ -42354,7 +42375,7 @@ function registerLoomyLlm(ctx, options) {
 }
 
 // vendor/channel-pack/src/raccoon-adapter.ts
-import { LlmAdapter as LlmAdapter8, LlmError as LlmError12, ReasoningEffortId as ReasoningEffortId8 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter8, LlmError as LlmError11, ReasoningEffortId as ReasoningEffortId8 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/raccoon.ts
 import { createCipheriv as createCipheriv2, randomBytes as randomBytes3 } from "node:crypto";
@@ -42681,10 +42702,10 @@ var RaccoonAdapter = class extends LlmAdapter8 {
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(entry).includes("image")) {
-        throw new LlmError12(`raccoon: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`, "UNSUPPORTED_CONTENT");
+        throw new LlmError11(`raccoon: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`, "UNSUPPORTED_CONTENT");
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError12("raccoon: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+        throw new LlmError11("raccoon: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       const readImage = this.options.readImage;
@@ -42705,7 +42726,7 @@ var RaccoonAdapter = class extends LlmAdapter8 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError12("raccoon: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError11("raccoon: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     const messages = serializeMessages4(options.messages, imageUrls);
     const wireMessages = options.system !== void 0 && options.system.length > 0 ? [{ role: "system", content: options.system }, ...messages] : messages;
@@ -42755,7 +42776,7 @@ var RaccoonAdapter = class extends LlmAdapter8 {
       } catch (error) {
         if (options.signal?.aborted) throw error;
         if (isTransportError4(error)) {
-          throw new LlmError12(
+          throw new LlmError11(
             `raccoon: transport error: ${error instanceof Error ? error.message : String(error)}`,
             "TRANSPORT",
             { cause: error }
@@ -42769,14 +42790,14 @@ var RaccoonAdapter = class extends LlmAdapter8 {
       await this.options.refresh();
       const refreshed = await this.options.resolveCredential(options.model);
       if (refreshed === void 0 || refreshed.access_token.length === 0) {
-        throw new LlmError12("raccoon: credential expired and refresh failed", "AUTH", { status: response.status });
+        throw new LlmError11("raccoon: credential expired and refresh failed", "AUTH", { status: response.status });
       }
       credential = refreshed;
       response = await send();
     }
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
-      throw new LlmError12(`raccoon: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
+      throw new LlmError11(`raccoon: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
     }
     yield* consumeOpenAiSse(response, { signal: options.signal }, {
       label: "raccoon",
@@ -44105,9 +44126,9 @@ import { credentialRef as credentialRef4 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/lobsterai-oauth.ts
 import { createServer as createServer2 } from "node:http";
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 function createLobsteraiLoginSession(nowMs = Date.now()) {
-  return { uuid: randomUUID3(), firstKeyfrom: String(nowMs) };
+  return { uuid: randomUUID5(), firstKeyfrom: String(nowMs) };
 }
 function buildLobsteraiLoginUrl(port, state, product) {
   const redirectUri = `http://127.0.0.1:${port}${LOBSTERAI_CALLBACK_PATH}`;
@@ -44176,7 +44197,7 @@ async function startLobsteraiLoginFlow(options) {
   const fetcher = options.fetcher ?? fetch;
   const { product, clientVersion } = options;
   const session = createLobsteraiLoginSession();
-  const state = randomUUID3();
+  const state = randomUUID5();
   let resolveResult;
   let rejectResult;
   const result = new Promise((resolve2, reject) => {
@@ -46911,10 +46932,10 @@ import { Service as Service7 } from "@deepseek-ai/cordis";
 import { credentialRef as credentialRef8 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/loomy-oauth.ts
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { randomUUID as randomUUID7 } from "node:crypto";
 
 // vendor/channel-pack/src/loomy-sign.ts
-import { createHash as createHash5, createHmac, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash5, createHmac, randomUUID as randomUUID6 } from "node:crypto";
 function loomyContentMd5(body) {
   if (body.length === 0) return "";
   return createHash5("md5").update(body, "utf8").digest("base64");
@@ -46956,7 +46977,7 @@ function buildLoomySigningString(options) {
 }
 function loomyAuthHeaders(options) {
   const date = (/* @__PURE__ */ new Date()).toUTCString();
-  const nonce = randomUUID4();
+  const nonce = randomUUID6();
   const contentType = options.contentType ?? "application/json";
   const body = options.body ?? "";
   const stringToSign = buildLoomySigningString({ ...options, contentType, body, date, nonce });
@@ -46984,7 +47005,7 @@ function buildLoomyAccountBody(product, param) {
       devid: "web",
       // ⚠️ 硬编码 macOS：客户端在 Windows 上发的也是这个值，照抄不要改。
       ua: "Loomy|Desktop|Electron|macOS",
-      traceid: randomUUID5().replace(/-/g, "")
+      traceid: randomUUID7().replace(/-/g, "")
     },
     param
   };
@@ -47117,7 +47138,7 @@ async function bindLoomySkip(rcode, product, fetcher = fetch) {
 
 // vendor/channel-pack/src/loomy-wechat-login.ts
 import { createServer as createServer4 } from "node:http";
-import { randomUUID as randomUUID6 } from "node:crypto";
+import { randomUUID as randomUUID8 } from "node:crypto";
 
 // vendor/channel-pack/src/loomy-wechat.ts
 var LOOMY_WECHAT_APP_ID = "wx18d60be432287cf8";
@@ -47271,7 +47292,7 @@ async function startLoomyWechatLoginFlow(options) {
     settled = true;
     rejectResult(error);
   };
-  state.uuid = await fetchLoomyWechatUuid(randomUUID6(), fetcher);
+  state.uuid = await fetchLoomyWechatUuid(randomUUID8(), fetcher);
   const server = createServer4((request2, response) => {
     void handleRequest(request2, response, {
       state,
@@ -51639,7 +51660,7 @@ function buildCarrierPageHtml(config) {
 }
 
 // vendor/channel-pack/src/zcode-login.ts
-import { randomBytes as randomBytes7, randomUUID as randomUUID7 } from "node:crypto";
+import { randomBytes as randomBytes7, randomUUID as randomUUID9 } from "node:crypto";
 var ZCODE_ORIGIN = "https://zcode.z.ai";
 var ZCODE_OAUTH_CLI_INIT_URL = `${ZCODE_ORIGIN}/api/v1/oauth/cli/init`;
 var zcodeOauthCliPollUrl = (flowId) => `${ZCODE_ORIGIN}/api/v1/oauth/cli/poll/${encodeURIComponent(flowId)}`;
@@ -51656,7 +51677,7 @@ function generateFlowSecret() {
   return randomBytes7(32).toString("hex");
 }
 function generateDeviceMid() {
-  return randomUUID7();
+  return randomUUID9();
 }
 async function startZcodeLogin(fetchImpl = fetch, options = {}) {
   const flowSecret = generateFlowSecret();
@@ -53845,7 +53866,7 @@ function emptyCheckinStatus(active, actionRequired = false) {
 }
 
 // vendor/channel-pack/src/zcode-adapter.ts
-import { EMPTY_RESPONSE_CODE as EMPTY_RESPONSE_CODE2, LlmAdapter as LlmAdapter9, LlmError as LlmError14, ReasoningEffortId as ReasoningEffortId9 } from "@deepseek-ai/dsh-llm";
+import { EMPTY_RESPONSE_CODE as EMPTY_RESPONSE_CODE2, LlmAdapter as LlmAdapter9, LlmError as LlmError13, ReasoningEffortId as ReasoningEffortId9 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/zcode-identity.ts
 var OFFICIAL_CLI_PREFIX = "You are ZCode, an interactive coding agent";
@@ -53936,7 +53957,7 @@ function withContextPrefix(messages, now = /* @__PURE__ */ new Date()) {
 }
 
 // vendor/channel-pack/src/zcode-anthropic.ts
-import { LlmError as LlmError13, ToolCallId as ToolCallId6 } from "@deepseek-ai/dsh-llm";
+import { LlmError as LlmError12, ToolCallId as ToolCallId6 } from "@deepseek-ai/dsh-llm";
 function parseToolArguments(raw) {
   if (raw === void 0 || raw === null) return {};
   if (typeof raw === "object") return raw;
@@ -54164,7 +54185,7 @@ async function* consumeAnthropicSse(body, options) {
       const error = payload.error;
       const message2 = typeof error === "object" && error !== null ? error.message : void 0;
       const type2 = typeof error === "object" && error !== null ? error.type : void 0;
-      throw new LlmError13(
+      throw new LlmError12(
         `${options.label}: ${typeof message2 === "string" ? message2 : JSON.stringify(payload).slice(0, 300)}`,
         // overloaded 是暂时性的，值得重试；其余按服务端错误处理。
         type2 === "overloaded_error" ? "RATE_LIMIT" : "SERVER"
@@ -54259,7 +54280,7 @@ async function* consumeAnthropicSse(body, options) {
     }
   }
   if (!sawAny) {
-    throw new LlmError13(
+    throw new LlmError12(
       `${options.label}: \u6A21\u578B\u8FD4\u56DE\u4E86\u7A7A\u54CD\u5E94\uFF08\u65E0\u4EFB\u4F55 text / thinking / tool \u5185\u5BB9\uFF09`,
       "EMPTY_RESPONSE"
     );
@@ -54722,13 +54743,13 @@ var ZcodeAdapter = class extends LlmAdapter9 {
       const all = await this.loadModels();
       const entry = all.find((item) => item.id === options.model);
       if (!this.inputModalitiesFor(entry).includes("image")) {
-        throw new LlmError14(
+        throw new LlmError13(
           `zcode: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError14(
+        throw new LlmError13(
           "zcode: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1\uFF08\u5BBF\u4E3B\u672A\u63D0\u4F9B attachments.readImage\uFF09",
           "UNSUPPORTED_CONTENT"
         );
@@ -54786,7 +54807,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
       }
     }
     const timedOut = () => controller.signal.aborted && options.signal?.aborted !== true;
-    const timeoutError = (cause) => new LlmError14(
+    const timeoutError = (cause) => new LlmError13(
       `zcode: \u8BF7\u6C42\u8D85\u65F6\uFF08${timeoutMs}ms \u5185\u672A\u5B8C\u6210\uFF09\u2014\u2014 \u4E0A\u6E38\u53EF\u80FD\u957F\u65F6\u95F4\u4E0D\u8FD4\u56DE\u6570\u636E`,
       "TIMEOUT",
       cause === void 0 ? void 0 : { cause }
@@ -54867,7 +54888,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
               break;
             }
           }
-          throw new LlmError14(
+          throw new LlmError13(
             `zcode: ${describeUpstreamError(response.status, text)}`,
             "QUOTA_EXCEEDED",
             { status: response.status }
@@ -54925,7 +54946,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
           shape: describeZcodeRequestShape(body.system, body.messages),
           now: Date.now()
         }) : void 0;
-        throw new LlmError14(
+        throw new LlmError13(
           `zcode: ${describeUpstreamError(response.status, text, diagnostic)}`,
           httpErrorCodeForZcode(response.status, text),
           { status: response.status }
@@ -54933,7 +54954,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
       }
       if (switchedAccount) continue;
       if (response === void 0) {
-        throw new LlmError14("zcode: \u4E0A\u6E38\u8BF7\u6C42\u672A\u53D1\u51FA\uFF08\u5185\u90E8\u72B6\u6001\u5F02\u5E38\uFF09", "SERVER");
+        throw new LlmError13("zcode: \u4E0A\u6E38\u8BF7\u6C42\u672A\u53D1\u51FA\uFF08\u5185\u90E8\u72B6\u6001\u5F02\u5E38\uFF09", "SERVER");
       }
       if (response.body === null) {
         if (quotaRound < this.product.quotaSwitchMax) {
@@ -54944,7 +54965,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
             continue;
           }
         }
-        throw new LlmError14(
+        throw new LlmError13(
           zcodeEntitlementErrorMessage(options.model, tried.size),
           "QUOTA_EXCEEDED"
         );
@@ -54972,7 +54993,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
               continue;
             }
           }
-          throw new LlmError14(
+          throw new LlmError13(
             zcodeEntitlementErrorMessage(options.model, tried.size),
             "QUOTA_EXCEEDED",
             { cause: error }
@@ -54997,7 +55018,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0) {
-      throw new LlmError14(
+      throw new LlmError13(
         "zcode: \u6CA1\u6709\u53EF\u7528\u7684\u51ED\u636E \u2014\u2014 \u8BF7\u5728 Channel Pack \u7684 ZCode \u9762\u677F\u70B9\u300C\u6DFB\u52A0\u8D26\u53F7\u300D\u5B8C\u6210\u767B\u5F55\uFF08\u672C\u63D2\u4EF6\u53EA\u7528\u5B83\u81EA\u5DF1\u7684\u6388\u6743\u6D41\u7A0B\uFF0C\u4E0D\u4F1A\u8BFB\u53D6\u672C\u673A ZCode \u5BA2\u6237\u7AEF\u7684\u767B\u5F55\u6001\uFF09",
         "MISSING_CREDENTIAL"
       );
@@ -55036,13 +55057,13 @@ var ZcodeAdapter = class extends LlmAdapter9 {
       if (error instanceof GateAbortedError) throw error;
       if (userSignal?.aborted === true) throw error;
       if (signal.aborted) {
-        throw new LlmError14(
+        throw new LlmError13(
           `zcode: \u8BF7\u6C42\u8D85\u65F6\uFF08${timeoutMs}ms \u5185\u672A\u5B8C\u6210\uFF09\u2014\u2014 \u4E0A\u6E38\u53EF\u80FD\u957F\u65F6\u95F4\u4E0D\u8FD4\u56DE\u6570\u636E`,
           "TIMEOUT",
           { cause: error }
         );
       }
-      throw new LlmError14(
+      throw new LlmError13(
         `zcode: \u8BF7\u6C42\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`,
         "TRANSPORT",
         { cause: error }
@@ -55117,7 +55138,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
   }
 };
 function isFastEntitlementMiss(error, elapsedMs) {
-  if (!(error instanceof LlmError14)) return false;
+  if (!(error instanceof LlmError13)) return false;
   if (error.code !== EMPTY_RESPONSE_CODE2) return false;
   return elapsedMs < ZCODE_FAST_EMPTY_MS;
 }
@@ -55130,7 +55151,7 @@ async function defaultAdapterSleep(ms, signal) {
   await new Promise((resolve2, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new LlmError14("zcode: \u9000\u907F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "TRANSPORT"));
+      reject(new LlmError13("zcode: \u9000\u907F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "TRANSPORT"));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
@@ -56107,7 +56128,7 @@ async function fetchMinimaxCreditBalance(credential, fetcher = fetch, product = 
 
 // vendor/channel-pack/src/gemini.ts
 import { randomBytes as randomBytes8 } from "node:crypto";
-import { LlmError as LlmError15, ReasoningEffortId as ReasoningEffortId10 } from "@deepseek-ai/dsh-llm";
+import { LlmError as LlmError14, ReasoningEffortId as ReasoningEffortId10 } from "@deepseek-ai/dsh-llm";
 var GEMINI_ENDPOINT_DAILY = "https://daily-cloudcode-pa.googleapis.com";
 var GEMINI_ENDPOINT_SANDBOX = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 var GEMINI_ENDPOINTS = [GEMINI_ENDPOINT_DAILY, GEMINI_ENDPOINT_SANDBOX];
@@ -56268,7 +56289,7 @@ function geminiCanonicalModelId(modelId) {
 }
 function geminiModelSpec(modelId, effort) {
   if (geminiCanonicalModelId(modelId) !== GEMINI_UPSTREAM_FLASH) {
-    throw new LlmError15(
+    throw new LlmError14(
       `gemini: \u6A21\u578B "${modelId}" \u4E0D\u5728\u672C provider \u76EE\u5F55\u4E2D\uFF08\u4EC5\u652F\u6301 ${GEMINI_UPSTREAM_FLASH}\uFF09`,
       "INVALID_REQUEST",
       // ⚠️ `status` 只落在 `LlmError.failure`（不是顶层属性），且网关的
@@ -57179,7 +57200,7 @@ async function fetchClineUsageLimits(credential, product, fetcher = fetch, optio
 }
 
 // vendor/channel-pack/src/lobsterai-credits.ts
-import { randomUUID as randomUUID8 } from "node:crypto";
+import { randomUUID as randomUUID10 } from "node:crypto";
 var LOBSTERAI_ACTIVITY_SLOT_PATH = "/api/client-activities/slot";
 var LOBSTERAI_ACTIVITY_CONTEXT_PATH = "/api/client-activities";
 var LOBSTERAI_PROFILE_SUMMARY_PATH = "/api/user/profile-summary";
@@ -57292,7 +57313,7 @@ async function claimLobsteraiDailyCheckin(credential, product, clientVersion, fe
     body: JSON.stringify({
       configRevision: slot2.configRevision,
       // 客户端幂等键（对齐 sigin.py:63 的 uuid4）：服务端据此去重。
-      idempotencyKey: randomUUID8(),
+      idempotencyKey: randomUUID10(),
       payload: {}
     })
   });
@@ -57842,14 +57863,14 @@ async function fetchTraeCreditBalance(credential, product, fetcher = fetch) {
 
 // vendor/channel-pack/src/account-probe.ts
 import { credentialRef as credentialRef10 } from "@deepseek-ai/dsh-credentials";
-import { createUserMessage, LlmError as LlmError17 } from "@deepseek-ai/dsh-llm";
+import { createUserMessage, LlmError as LlmError16 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/gemini-adapter.ts
 import {
   CONTEXT_WINDOW_EXCEEDED_CODE as CONTEXT_WINDOW_EXCEEDED_CODE3,
   isContextWindowExceededError as isContextWindowExceededError3,
   LlmAdapter as LlmAdapter10,
-  LlmError as LlmError16,
+  LlmError as LlmError15,
   ReasoningEffortId as ReasoningEffortId11
 } from "@deepseek-ai/dsh-llm";
 
@@ -58419,7 +58440,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
     }
     if (imageRefs.size === 0) return void 0;
     if (entry?.supportsImage !== true) {
-      throw new LlmError16(
+      throw new LlmError15(
         `gemini: \u6A21\u578B "${model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
         "UNSUPPORTED_CONTENT"
       );
@@ -58431,7 +58452,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
       if (inline === void 0) {
         const readImage = this.options.readImage;
         if (readImage === void 0) {
-          throw new LlmError16(
+          throw new LlmError15(
             "gemini: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1\uFF08readImage / readImageRequest \u5747\u672A\u63D0\u4F9B\uFF09",
             "UNSUPPORTED_CONTENT"
           );
@@ -58439,7 +58460,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
         try {
           inline = await readImage(ref);
         } catch (error) {
-          throw new LlmError16(
+          throw new LlmError15(
             "gemini: \u56FE\u7247\u9644\u4EF6\u8BFB\u53D6\u5931\u8D25\uFF1B\u9644\u4EF6\u670D\u52A1\u53EF\u80FD\u672A\u5C31\u7EEA\uFF0C\u6216\u8BE5\u5BF9\u8C61\u5DF2\u4E0D\u5B58\u5728\u3002",
             "UNSUPPORTED_CONTENT",
             { cause: error }
@@ -58447,20 +58468,20 @@ var GeminiAdapter = class extends LlmAdapter10 {
         }
       }
       if (inline === void 0) {
-        throw new LlmError16(
+        throw new LlmError15(
           "gemini: \u56FE\u7247\u9644\u4EF6\u8BFB\u53D6\u4E0D\u5230\u5185\u5BB9\uFF1B\u9644\u4EF6\u670D\u52A1\u53EF\u80FD\u672A\u5C31\u7EEA\uFF0C\u6216\u8BE5\u5BF9\u8C61\u5DF2\u4E0D\u5B58\u5728\u3002",
           "UNSUPPORTED_CONTENT"
         );
       }
       if (inline.data.byteLength > GEMINI_MAX_IMAGE_BYTES_INLINE) {
-        throw new LlmError16(
+        throw new LlmError15(
           `gemini: \u56FE\u7247\u4F53\u79EF ${inline.data.byteLength} \u5B57\u8282\u8D85\u8FC7\u4E0A\u6E38\u5185\u8054\u4E0A\u9650 ${GEMINI_MAX_IMAGE_BYTES_INLINE} \u5B57\u8282`,
           "UNSUPPORTED_CONTENT"
         );
       }
       const data = normalizeBase64(Buffer.from(inline.data).toString("base64"));
       if (data === void 0) {
-        throw new LlmError16("gemini: \u56FE\u7247\u7F16\u7801\u4E0D\u662F\u5408\u6CD5 base64", "UNSUPPORTED_CONTENT");
+        throw new LlmError15("gemini: \u56FE\u7247\u7F16\u7801\u4E0D\u662F\u5408\u6CD5 base64", "UNSUPPORTED_CONTENT");
       }
       images.set(id, { mediaType: inline.mediaType === "" ? "image/png" : inline.mediaType, data });
     }
@@ -58480,7 +58501,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
   async *stream(options) {
     const entry = this.loadModels().find((item) => item.id === geminiCanonicalModelId(options.model));
     if (entry === void 0) {
-      throw new LlmError16(
+      throw new LlmError15(
         `gemini: \u6A21\u578B "${options.model}" \u4E0D\u5728\u672C provider \u76EE\u5F55\u4E2D\uFF08\u4EC5\u652F\u6301 ${GEMINI_UPSTREAM_FLASH}\uFF09`,
         "INVALID_REQUEST",
         // 模型名写错是确定性失败：带上 404，网关才不会把它当 502 让客户端白重试。
@@ -58493,7 +58514,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token === "") {
-      throw new LlmError16("gemini: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError15("gemini: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     const requested = options.reasoningEffort === void 0 ? void 0 : String(options.reasoningEffort);
     const declared = entry === void 0 ? void 0 : geminiReasoningInfo(entry);
@@ -58535,7 +58556,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
             ...options.signal === void 0 ? {} : { signal: options.signal }
           });
           if (probe.error !== void 0) {
-            throw new LlmError16(
+            throw new LlmError15(
               `gemini: \u9879\u76EE\u53F7\u63A2\u6D4B\u5931\u8D25\uFF0C\u672A\u53D1\u63A8\u7406\uFF08\u4E0E\u539F\u7248\u4E00\u81F4\uFF09\u2014 ${probe.error}`,
               "SERVER"
             );
@@ -58574,7 +58595,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
         const wire = marshalAlphabetical(envelope);
         const wireBytes = Buffer.byteLength(wire, "utf8");
         if (wireBytes > GEMINI_MAX_REQUEST_BODY_BYTES) {
-          throw new LlmError16(
+          throw new LlmError15(
             `gemini: \u8BF7\u6C42\u4F53 ${wireBytes} \u5B57\u8282\u8D85\u8FC7\u4E0A\u9650 ${GEMINI_MAX_REQUEST_BODY_BYTES} \u5B57\u8282`,
             CONTEXT_WINDOW_EXCEEDED_CODE3
           );
@@ -58589,8 +58610,8 @@ var GeminiAdapter = class extends LlmAdapter10 {
             signal: options.signal
           });
         } catch (error) {
-          if (error instanceof LlmError16) throw error;
-          throw new LlmError16(
+          if (error instanceof LlmError15) throw error;
+          throw new LlmError15(
             `gemini: \u8BF7\u6C42\u53D1\u9001\u5931\u8D25 \u2014 ${error instanceof Error ? error.message : String(error)}`,
             "TRANSPORT",
             { cause: error }
@@ -58598,7 +58619,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
         }
         if (response.ok) {
           if (response.body === null) {
-            throw new LlmError16("gemini: \u54CD\u5E94\u7F3A\u5C11 body", "EMPTY_RESPONSE");
+            throw new LlmError15("gemini: \u54CD\u5E94\u7F3A\u5C11 body", "EMPTY_RESPONSE");
           }
           const body = response.body;
           try {
@@ -58669,7 +58690,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
               continue;
             }
           }
-          throw new LlmError16(
+          throw new LlmError15(
             `gemini: \u6A21\u578B ${options.model} \u7684\u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528\uFF08\u9650\u6D41\u6216\u989D\u5EA6\u8017\u5C3D\uFF09\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5`,
             "QUOTA_EXCEEDED",
             { status }
@@ -58694,15 +58715,15 @@ var GeminiAdapter = class extends LlmAdapter10 {
     const detail = text === "" ? "" : ` \u2014 ${text.slice(0, 500)}`;
     const message2 = `gemini: HTTP ${status}${detail}`;
     if (status === 400 && isGeminiContextOverflow(text)) {
-      return new LlmError16(message2, CONTEXT_WINDOW_EXCEEDED_CODE3, { status });
+      return new LlmError15(message2, CONTEXT_WINDOW_EXCEEDED_CODE3, { status });
     }
     if (status === 400 && isGeminiQuotaText(text)) {
-      return new LlmError16(message2, "QUOTA_EXCEEDED", { status });
+      return new LlmError15(message2, "QUOTA_EXCEEDED", { status });
     }
-    if (status === 429) return new LlmError16(message2, "RATE_LIMIT", { status });
-    if (status === 403 || status === 404) return new LlmError16(message2, "SERVER", { status });
-    if (status === 401) return new LlmError16(message2, "AUTH", { status });
-    return new LlmError16(message2, httpErrorCode4(status), { status });
+    if (status === 429) return new LlmError15(message2, "RATE_LIMIT", { status });
+    if (status === 403 || status === 404) return new LlmError15(message2, "SERVER", { status });
+    if (status === 401) return new LlmError15(message2, "AUTH", { status });
+    return new LlmError15(message2, httpErrorCode4(status), { status });
   }
 };
 function registerGeminiLlm(ctx, options) {
@@ -58718,7 +58739,7 @@ var PROBE_PROMPT = "\u53EA\u56DE\u7B54\u4E24\u4E2A\u5B57\uFF1A\u6536\u5230";
 var PROBE_SYSTEM = "You are a helpful assistant.";
 var PROBE_TIMEOUT_MS = 12e4;
 function isRateLimitFailure(error) {
-  if (error instanceof LlmError17) {
+  if (error instanceof LlmError16) {
     if (error.code === "RATE_LIMIT" || error.code === "QUOTA_EXCEEDED" || error.code === "QUOTA") return true;
   }
   const message2 = error instanceof Error ? error.message : String(error);
@@ -62793,7 +62814,7 @@ function reply(rpcId, result) {
 
 // vendor/channel-pack/src/openai-gateway/server.ts
 import { createServer as createServer7 } from "node:http";
-import { randomUUID as randomUUID12 } from "node:crypto";
+import { randomUUID as randomUUID14 } from "node:crypto";
 import { homedir as homedir4 } from "node:os";
 import { join as join9 } from "node:path";
 
@@ -62836,7 +62857,7 @@ function loadOrCreateApiKey(home, env = process.env) {
 }
 
 // vendor/channel-pack/src/openai-gateway/messages.ts
-import { randomUUID as randomUUID9 } from "node:crypto";
+import { randomUUID as randomUUID11 } from "node:crypto";
 import { ReasoningEffortId as ReasoningEffortId12 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/openai-gateway/images.ts
@@ -63067,7 +63088,7 @@ function gatewaySource() {
   return { kind: "plugin:dsh-openai-gateway" };
 }
 function createGatewayMessage(role, content, source) {
-  return { id: randomUUID9(), role, content, source };
+  return { id: randomUUID11(), role, content, source };
 }
 function convertToolCalls(raw) {
   if (!Array.isArray(raw)) throw new OpenAiGatewayError("assistant.tool_calls must be an array");
@@ -63227,11 +63248,11 @@ function findCaseInsensitiveSuggestion(requested, catalog) {
 }
 
 // vendor/channel-pack/src/openai-gateway/responses.ts
-import { createHash as createHash7, randomUUID as randomUUID11 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID13 } from "node:crypto";
 import { ReasoningEffortId as ReasoningEffortId13 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/openai-gateway/stream.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID12 } from "node:crypto";
 
 // vendor/channel-pack/src/openai-gateway/usage.ts
 function count(value) {
@@ -63366,7 +63387,7 @@ function consumeChunk(state, chunk) {
       return void 0;
   }
 }
-async function* toOpenAiSse(chunks, requestId = `chatcmpl-${randomUUID10()}`, model, suggest) {
+async function* toOpenAiSse(chunks, requestId = `chatcmpl-${randomUUID12()}`, model, suggest) {
   const state = { content: "", reasoning: "", tools: /* @__PURE__ */ new Map() };
   try {
     for await (const chunk of chunks) {
@@ -63421,7 +63442,7 @@ async function* toOpenAiSse(chunks, requestId = `chatcmpl-${randomUUID10()}`, mo
     yield "data: [DONE]\n\n";
   }
 }
-async function collectOpenAiCompletion(chunks, requestId = `chatcmpl-${randomUUID10()}`, model, suggest) {
+async function collectOpenAiCompletion(chunks, requestId = `chatcmpl-${randomUUID12()}`, model, suggest) {
   const state = { content: "", reasoning: "", tools: /* @__PURE__ */ new Map() };
   try {
     for await (const chunk of chunks) {
@@ -63758,7 +63779,7 @@ async function toResponsesGenerateOptions(body, signal, reasoningEffortOverride,
   };
 }
 function hexId() {
-  return randomUUID11().replaceAll("-", "");
+  return randomUUID13().replaceAll("-", "");
 }
 function itemId(kind) {
   if (kind === "reasoning") return `rs_${hexId()}`;
@@ -64429,7 +64450,7 @@ function createOpenAiGateway(options) {
       });
       const stream = options.llm.stream(markGatewayChannel(generate));
       const fullId = `${route.provider}/${route.model}`;
-      const responseId = `resp_${randomUUID12().replaceAll("-", "")}`;
+      const responseId = `resp_${randomUUID14().replaceAll("-", "")}`;
       if (body.stream === true) {
         writeSseHead(response);
         for await (const event of toResponsesSse(stream, responseId, fullId, body, makeSuggestion(fullId))) {
@@ -64564,7 +64585,7 @@ function mountOpenAiGateway(ctx, pool) {
 }
 
 // vendor/channel-pack/src/loop-recovery.ts
-import { createUserMessage as createUserMessage2, LlmError as LlmError18 } from "@deepseek-ai/dsh-llm";
+import { createUserMessage as createUserMessage2, LlmError as LlmError17 } from "@deepseek-ai/dsh-llm";
 var LOOP_RESUME_PROMPT = "\u7EE7\u7EED\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\u3002\u4E0A\u4E00\u8F6E\u4F60\u7684\u601D\u8003\u9677\u5165\u4E86\u91CD\u590D\uFF08\u540C\u4E00\u6BB5\u63A8\u7406\u53CD\u590D\u51FA\u73B0\uFF09\u800C\u88AB\u4E2D\u6B62 \u2014\u2014 \u8BF7\u6362\u4E00\u79CD\u601D\u8DEF\uFF0C\u4E0D\u8981\u91CD\u590D\u521A\u624D\u90A3\u6BB5\u63A8\u7406\uFF0C\u76F4\u63A5\u63A8\u8FDB\u4EFB\u52A1\u3002";
 var LOOP_RESUME_DEFAULT_MAX = 2;
 var LOOP_RESUME_MAX_LIMIT = 10;
@@ -64585,7 +64606,7 @@ function resolveLoopResumePolicy(env = process.env) {
   };
 }
 function isReasoningLoopFailure(error) {
-  if (error instanceof LlmError18) return error.code === REASONING_LOOP_CODE;
+  if (error instanceof LlmError17) return error.code === REASONING_LOOP_CODE;
   if (typeof error !== "object" || error === null) return false;
   return error.code === REASONING_LOOP_CODE;
 }
@@ -65629,7 +65650,7 @@ function parseMinimaxModelsPayload(payload) {
 }
 
 // vendor/channel-pack/src/minimax-adapter.ts
-import { LlmAdapter as LlmAdapter11, LlmError as LlmError19, ReasoningEffortId as ReasoningEffortId14 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter11, LlmError as LlmError18, ReasoningEffortId as ReasoningEffortId14 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/minimax-messages.ts
 import { ToolCallId as ToolCallId8 } from "@deepseek-ai/dsh-llm";
@@ -66105,7 +66126,7 @@ var MinimaxAdapter = class extends LlmAdapter11 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token === "") {
-      throw new LlmError19("minimax: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError18("minimax: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     const entry = (await this.loadModels()).find((item) => item.id === options.model);
     const imageRefs = /* @__PURE__ */ new Map();
@@ -66115,13 +66136,13 @@ var MinimaxAdapter = class extends LlmAdapter11 {
     let images;
     if (imageRefs.size > 0) {
       if (entry?.supportsImage !== true) {
-        throw new LlmError19(
+        throw new LlmError18(
           `minimax: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError19(
+        throw new LlmError18(
           "minimax: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1\uFF08readImage \u672A\u63D0\u4F9B\uFF09",
           "UNSUPPORTED_CONTENT"
         );
@@ -66162,14 +66183,14 @@ var MinimaxAdapter = class extends LlmAdapter11 {
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       const code = response.status === 402 ? "QUOTA_EXCEEDED" : httpErrorCode4(response.status);
-      throw new LlmError19(
+      throw new LlmError18(
         `minimax: HTTP ${response.status}${text === "" ? "" : ` \u2014 ${text.slice(0, 500)}`}`,
         code,
         { status: response.status }
       );
     }
     if (response.body === null) {
-      throw new LlmError19("minimax: \u54CD\u5E94\u7F3A\u5C11 body", "EMPTY_RESPONSE");
+      throw new LlmError18("minimax: \u54CD\u5E94\u7F3A\u5C11 body", "EMPTY_RESPONSE");
     }
     yield* consumeMinimaxSse({ body: response.body, signal: options.signal });
   }
@@ -67132,7 +67153,7 @@ function createGeminiSigStore(ctx) {
 }
 
 // vendor/channel-pack/src/opencode-adapter.ts
-import { LlmAdapter as LlmAdapter12, LlmError as LlmError20, ReasoningEffortId as ReasoningEffortId15 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter12, LlmError as LlmError19, ReasoningEffortId as ReasoningEffortId15 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/opencode-messages.ts
 var FREE_LANE_GATE_TOOLS = ["bash", "read"];
@@ -67515,10 +67536,10 @@ var OpencodeAdapter = class extends LlmAdapter12 {
   async *stream(options) {
     const slots = await this.options.identitySlots();
     if (slots.length === 0) {
-      throw new LlmError20("opencode: \u6CA1\u6709\u53EF\u7528\u901A\u9053", "MISSING_CREDENTIAL");
+      throw new LlmError19("opencode: \u6CA1\u6709\u53EF\u7528\u901A\u9053", "MISSING_CREDENTIAL");
     }
     if (pickSlot(slots, options.model, /* @__PURE__ */ new Set()) === void 0) {
-      throw new LlmError20(
+      throw new LlmError19(
         `opencode: \u6A21\u578B "${options.model}" \u9700\u8981 API key \u8D26\u53F7\u901A\u9053\uFF08\u533F\u540D\u901A\u9053\u53EA\u652F\u6301\u514D\u8D39\u6A21\u578B\uFF09\uFF0C\u8BF7\u5148\u5728 Channel Pack \u7684 OpenCode \u9762\u677F\u6DFB\u52A0\u4E00\u4E2A\u8D26\u53F7`,
         "MISSING_CREDENTIAL"
       );
@@ -67528,7 +67549,7 @@ var OpencodeAdapter = class extends LlmAdapter12 {
     for (; ; ) {
       const slot2 = pickSlot(slots, options.model, tried);
       if (slot2 === void 0) {
-        throw new LlmError20(
+        throw new LlmError19(
           `opencode: \u6240\u6709\u901A\u9053\u5BF9\u8BE5\u6A21\u578B\u5747\u53D7\u9650${limited.length > 0 ? `\uFF08${limited.join("\u3001")}\uFF09` : ""}`,
           "QUOTA_EXCEEDED"
         );
@@ -67544,13 +67565,13 @@ var OpencodeAdapter = class extends LlmAdapter12 {
         return;
       } catch (error) {
         if (delivered) throw error;
-        if (error instanceof LlmError20 && error.code === "QUOTA_EXCEEDED") throw error;
+        if (error instanceof LlmError19 && error.code === "QUOTA_EXCEEDED") throw error;
         const info = classifyOpencodeFailure(error);
         if (info.kind === "free_tier") {
           this.options.warn?.(
             `opencode: \u514D\u8D39\u901A\u9053\u88AB FreeTierError \u62D2\u7EDD \u2014\u2014 \u68C0\u67E5 session id \u5F62\u72B6\uFF08\u5E94\u4E3A ses_ + 12hex + 14base62\uFF09\uFF1A${info.detail}`
           );
-          throw new LlmError20(
+          throw new LlmError19(
             `opencode: \u514D\u8D39\u901A\u9053\u88AB\u4E0A\u6E38\u62D2\u7EDD\uFF08FreeTierError\uFF09\u3002\u8BE5\u9519\u8BEF\u7531\u8BF7\u6C42\u5F62\u72B6\u89E6\u53D1\uFF08session id \u5F62\u72B6\u4E0D\u5BF9\u65F6\u51FA\u73B0\uFF09\uFF0C\u6362 API key \u6216\u6362\u51FA\u53E3\u90FD\u65E0\u6548\u3002`,
             "AUTH",
             { status: 403 }
@@ -67594,13 +67615,13 @@ var OpencodeAdapter = class extends LlmAdapter12 {
     if (refs.size === 0) return void 0;
     const capabilities = getOpencodeCapabilitiesSync();
     if (!supportsOpencodeImage(capabilities.find((c) => c.id === model))) {
-      throw new LlmError20(
+      throw new LlmError19(
         `opencode: \u6A21\u578B "${model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165\uFF08\u80FD\u529B\u4EE5\u8FDC\u7AEF models.dev \u4E3A\u51C6\uFF09`,
         "UNSUPPORTED_CONTENT"
       );
     }
     if (this.options.readImage === void 0) {
-      throw new LlmError20("opencode: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+      throw new LlmError19("opencode: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
     }
     const readImage = this.options.readImage;
     const out = /* @__PURE__ */ new Map();
@@ -67645,7 +67666,7 @@ var OpencodeAdapter = class extends LlmAdapter12 {
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       const retryAfterMs = retryAfterMsFromResponse(response.headers);
-      throw new LlmError20(
+      throw new LlmError19(
         `opencode: HTTP ${response.status} \u2014 ${text.slice(0, 300)}`,
         httpErrorCode4(response.status),
         {
@@ -67890,7 +67911,7 @@ function apply(ctx, config = {}) {
       modelId ?? ""
     );
     if (limited === void 0) return;
-    throw new LlmError21(
+    throw new LlmError20(
       `${product.displayName}\uFF1A\u6A21\u578B ${modelId} \u7684\u53EF\u7528\u8D26\u53F7\u5747\u5728\u9650\u6D41\u4E2D\uFF0C\u6700\u8FD1\u4E00\u4E2A\u5C06\u4E8E ${new Date(limited.resetAtMs).toLocaleString("zh-CN")} \u89E3\u7981\u3002\u53EF\u6539\u7528\u5176\u5B83 provider / \u6A21\u578B\uFF0C\u6216\u7B49\u5F85\u89E3\u7981\u540E\u518D\u8BD5\uFF08\u65E0\u9700\u91CD\u65B0\u767B\u5F55\uFF09\u3002`,
       "QUOTA_EXCEEDED"
     );

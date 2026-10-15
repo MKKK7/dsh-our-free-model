@@ -34,7 +34,7 @@
  *   大小写不敏感匹配等逻辑。
  */
 
-import { createCipheriv, createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 import { jwtExpiresAtMs } from './buddy.js'
 import { TRAE_CHANNELS, type TraeProduct } from './trae-product.js'
 
@@ -234,6 +234,46 @@ export function traeSOLOHeaders(
   stream: boolean,
   machineIdGeneration = 0,
 ): Record<string, string> {
+  const machineId = deriveRotatingMachineId(credential.machine_id, machineIdGeneration)
+  if (product.id === 'trae_intl') {
+    // ── 国际版：a0ai-api-sg / trae-api-sg 的 `inline_chat` 专用头 ──
+    //
+    // ⚠️ 这里**不能**沿用下面 CN 那套 SOLO 头 —— 实测（`tmp/bisect-headers.mjs`，
+    // 逐个头叠加打 a0ai 的 `/api/ide/v1/model_list`）：
+    //
+    // ```
+    // 200 9  baseline（本函数这组头）
+    // 200 9  + X-Ide-Token / X-Uid / X-App-Version / X-Ide-Version
+    // 500 -  + X-App-Id            ← 单独加它就 500
+    // 200 9  + X-App-Version-Code / X-Ide-Version-Type
+    // 200 9  + X-Device-Type / X-Device-Brand / Request-Traffic-Type / X-Device-Id
+    // 500 -  + 全部
+    // ```
+    //
+    // 大写 `X-App-Id` 是 SOLO 后端的头，SG 网关拿到它会走错配置分支直接 500。
+    // 国际版要的是**小写** `x-app-id`。与其「加完再删」，不如直接早返回，
+    // 保持这张头表与实测契约逐字对应。
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: stream ? 'text/event-stream' : 'application/json',
+      Authorization: `Cloud-IDE-JWT ${credential.access_token}`,
+      'X-Cloudide-Token': credential.access_token,
+      'x-uid': credential.uid,
+      'x-app-id': product.appId,
+      'x-request-id': randomUUID(),
+      'x-ide-version': product.ideVersion,
+      'x-ide-version-code': product.ideVersionCode,
+      'x-device-type': 'windows',
+      'x-os-version': 'Windows 10',
+    }
+    if (machineId.length > 0) {
+      // `x-device-id` 是 **machineId 的 sha256 前 32 hex**，不是登录时那个
+      // 19 位十进制 `device_id`（后者只用于 CN/SOLO 的 OAuth DeviceInfo）。
+      headers['x-machine-id'] = machineId
+      headers['x-device-id'] = createHash('sha256').update(machineId).digest('hex').slice(0, 32)
+    }
+    return headers
+  }
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: stream ? 'text/event-stream' : 'application/json',
@@ -253,8 +293,8 @@ export function traeSOLOHeaders(
     'X-Device-Brand': product.deviceBrand,
     'Request-Traffic-Type': 'prod',
   }
-  if (credential.machine_id.length > 0) {
-    headers['X-Machine-Id'] = deriveRotatingMachineId(credential.machine_id, machineIdGeneration)
+  if (machineId.length > 0) {
+    headers['X-Machine-Id'] = machineId
   }
   if (credential.device_id.length > 0) {
     headers['X-Device-Id'] = credential.device_id
@@ -1350,92 +1390,23 @@ export function parseTraeBatchModelList(
   return [...byId.values()]
 }
 
-// ── 国际版：请求信封（aes-256-gcm 混淆防滥用）──
-
-/**
- * 国际版 `llm_raw_chat` 的信封密钥（32 字节，hex 硬编码在客户端里）。
- *
- * 来源：`D:\Tools\Trae\resources\app\extensions\ai-completion\resource\aiserver\server.js`
- * 反混淆后偏移 9018804 的 `masticateVegetablesToPulp`。
- * 这是**客户端与服务端共享的固定密钥**，不是账号派生量，故所有用户一致。
- */
-const TRAE_ENVELOPE_KEY_HEX = '6195f24ca4d430f8a4833de7db8dac37d148a084e7464a351ffa68585c16b955'
-
-/** 国际版聊天请求的信封（AAD = 时间戳、tag 拼在密文尾部、pin 走 hex）。 */
-export interface TraeEnvelope {
-  /** `base64(iv(12) ‖ ciphertext ‖ authTag(16))`。 */
-  message: string
-  /** `X-Request-Pin` 的值 —— 8 字节 pin 的 **hex**（不是 base64）。 */
-  requestPin: string
-  /** `X-Requested-At` 的值 —— unix **秒**。 */
-  requestAt: number
-}
-
-/**
- * 把明文封进 `llm_raw_chat` 的 `message` 字段（客户端 `masticateVegetablesToPulp`）。
- *
- * 算法（逐行还原自 deob 偏移 9018804）：
- * 1. `key = KEY_HEX`，`requestAt = floor(now/1000)`，`pin = randomBytes(8)`；
- * 2. `key[0..8] ^= pin[0..8]` —— 密钥前 8 字节与 pin **逐字节异或**；
- * 3. `iv = randomBytes(12)`，`aes-256-gcm`，**AAD = `String(requestAt)`**；
- * 4. `message = base64(iv ‖ ct ‖ tag)`（tag 16 字节拼在尾部，不是拼在前面）；
- * 5. `requestPin = pin.toString('hex')`。
- *
- * ⚠️ **每次请求必须重新封一次**：服务端记录已用 pin，重复提交同一个 pin 会得到
- * 流内 `event: error {"code":4120}`（实测）。所以调用方要在**每次重试**时重新调用本函数。
- *
- * ⚠️ `requestPin` 用 hex 而非 base64 —— 早期按 base64 实现时错误码是 `4001`，
- * 改成 hex 后变成 `4120`，说明 pin 校验已通过、失败点移到了业务层。
- */
-export function sealTraeEnvelope(plaintext: Buffer | string): TraeEnvelope {
-  const key = Buffer.from(TRAE_ENVELOPE_KEY_HEX, 'hex')
-  const requestAt = Math.floor(Date.now() / 1000)
-  const pin = randomBytes(8)
-  for (let i = 0; i < 8; i++) key[i] ^= pin[i]!
-  const iv = randomBytes(12)
-  const cipher = createCipheriv('aes-256-gcm', key, iv)
-  cipher.setAAD(Buffer.from(String(requestAt)))
-  const ciphertext = Buffer.concat([cipher.update(typeof plaintext === 'string' ? Buffer.from(plaintext) : plaintext), cipher.final()])
-  return {
-    message: Buffer.concat([iv, ciphertext, cipher.getAuthTag()]).toString('base64'),
-    requestPin: pin.toString('hex'),
-    requestAt,
-  }
-}
-
-/**
- * 取国际版聊天专用的临时 JWT（`Authorization: Cloud-IDE-JWT <jwt>` 用）。
- *
- * 端点 `POST {product.ugHost}/cloudide/api/v3/trae/GenerateTempToken`，
- * body `{IDEVersion}`，**只**带 `x-cloudide-token`（OAuth access_token）。
- * 响应 `{Result:{Token, ExpireDuration:10080}}`，JWT payload
- * `{"data":{"id":"<uid>","tenant_id":"…","type":"user","user_id":"<uid>"},"iss":"trae"}`。
- *
- * ⚠️ 与 CN 的差别（实测 6 种认证组合）：国际版 `llm_raw_chat` 需要
- * **同时**给 `Authorization: Cloud-IDE-JWT <该JWT>` 和 `X-Cloudide-Token: <access_token>`。
- * 只给 access → `4120`；只给 JWT（不带 access）→ `1001`；把 `X-Cloudide-Token`
- * 也换成 JWT → `1001`。
- */
-export async function fetchTraeChatJwt(
-  credential: TraeCredential,
-  product: TraeProduct,
-  fetcher: typeof fetch,
-): Promise<string> {
-  const response = await fetcher(`${product.ugHost}/cloudide/api/v3/trae/GenerateTempToken`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-cloudide-token': credential.access_token,
-    },
-    body: JSON.stringify({ IDEVersion: product.ideVersion }),
-    signal: AbortSignal.timeout(TRAE_REQUEST_TIMEOUT_MS),
-  })
-  if (!response.ok) throw new LlmError(`trae: GenerateTempToken HTTP ${response.status}`, 'AUTH', { status: response.status })
-  const body = await response.json() as unknown
-  const token = readStringField((body as Record<string, unknown>).Result as Record<string, unknown> ?? {}, 'Token')
-  if (token.length === 0) throw new LlmError('trae: GenerateTempToken returned no token', 'AUTH')
-  return token
-}
+// ── 国际版：请求信封（aes-256-gcm）── 【2026-10-15 整块删除，仅留记录】
+//
+// ⚠️ 以下三样曾用于国际版 `llm_raw_chat` 端点，实测证明那条路**只对 SOLO
+// 权益账号开放**（Pro $20 账号恒回 `4120` / `4023`，与账号余额无关）。
+//
+// 国际版 Pro 套餐实际走 `a0ai-api-sg.byteintlapi.com` 的
+// `POST /api/agent/v3/llm_utils_chat` + `function: inline_chat` ——
+// **裸 JSON POST，不需要信封、不需要 GenerateTempToken JWT**。把 OAuth
+// `access_token` 同时放进 `Authorization: Cloud-IDE-JWT` 和 `X-Cloudide-Token`
+// 即可（见 {@link traeSOLOHeaders} 的 `trae_intl` 分支）。
+//
+// 删掉的三样，留在注释里以免重犯：
+//   - TRAE_ENVELOPE_KEY_HEX = '6195f24ca4d430f8a4833de7db8dac37d148a084e7464a351ffa68585c16b955'
+//     （aiserver 反混淆偏移 9018804 的 `masticateVegetablesToPulp` 硬编码密钥）。
+//   - `sealTraeEnvelope()` —— aes-256-gcm，AAD = 秒级时间戳，X-Request-Pin 走 hex。
+//   - `fetchTraeChatJwt()` —— `POST {ugHost}/cloudide/api/v3/trae/GenerateTempToken`
+//     换 933 字符 JWT。`inline_chat` 直接用 access_token，不走这个。
 
 // ── 国际版模型列表解析 ──
 

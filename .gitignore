@@ -48,3 +48,6 @@ packages/desktop/src-tauri/.node-license-cache/
 packages/desktop/node_modules/
 
 _audit/
+
+# 探针/自测脚本与抓包转储，含本地凭据，绝不入库
+/tmp/

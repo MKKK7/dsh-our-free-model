@@ -199,7 +199,7 @@ resource\aiserver\server.js`（15.5 MB，obfuscator.io 风格，解码器 `_0x45
 
 | 项 | 值 | 来源 |
 |---|---|---|
-| agent host | `https://coresg-normal.trae.ai` | 实测认证 200 |
+| agent host | ~~`https://coresg-normal.trae.ai`~~ → **`https://a0ai-api-sg.byteintlapi.com`** | **2026-10-15 推翻，见下节** |
 | `X-App-Id` | `6eefa01c-1036-4c7e-9ca5-d891f63bfcd8` | `product.json` 的 `agent.appId`（与 CN 同值） |
 | OAuth/UG host | `https://growsg-normal.trae.ai` | 日志 |
 | login portal | `https://www.trae.ai/authorization` | 日志 |
@@ -263,7 +263,11 @@ OAuth `access_token`。
 
 → 认证已通过，失败在业务层。
 
-### ⛔ 当前阻塞：`4120` = 账号无 SOLO 权益
+### ⛔ 当时的阻塞：`4120` = 打错了端点（**已作废，见下节**）
+
+> 上一节整段结论作废。「`4120` = 账号无 SOLO 权益」是**误判**：`4120` 只是
+> `coresg-normal.trae.ai` 这台 SOLO 网关对 Pro 账号的拒绝，与权益无关。
+> Pro 账号走的是完全不同的主机和端点（见下一节）。
 
 `POST growsg-normal.trae.ai/trae/api/v1/pay/ide_user_pay_status` 的响应把话说死了：
 
@@ -277,12 +281,7 @@ OAuth `access_token`。
 ```
 
 `user_pay_identity: 0` + 五个 `enable_solo_*` 全 `false` —— 该账号**没有任何 SOLO
-套餐**。`model_list` 是登录即可读的目录，但 `llm_raw_chat` 需要付费权益，
-所以 9 个模型 × 3 次重试 × 6 种认证组合全部 `4120`，换哪个模型都一样。
-
-**结论**：国际版渠道的**登录 + 目录**已经可用（登录跑通、模型列表从上游实时拉取），
-**对话**要等账号本身有 SOLO 权益。这是账号状态问题，不是协议问题 —— 协议侧
-已无可再挖。
+套餐**（真账号是 **Pro $20**，权益走另一条基础通道）。
 
 ### 顺带修掉的两个既有缺陷
 
@@ -292,3 +291,145 @@ OAuth `access_token`。
    用错值时 `/api/ide/v1/super_completion` 回
    `code:2001 super completion service not found: 677332`、`model_list` 回 500。
    这条报错就是判断 appId 对错的 oracle。已改为 UUID。
+
+---
+
+## 国际版重写：回到真实的 `inline_chat` 协议（2026-10-15）
+
+上一节整套结论建立在「`aiserver/server.js` 里的 `llm_raw_chat` 就是 Trae 国际版
+对话通道」这个假设上。**假设是错的。** 抓包为什么一直失败，现在有了解释：
+`aiserver` 根本不在对话链路上 —— 对话是渲染进程 webview 的流量，走 TUN +
+WinINET（系统代理），与 `--proxy-server` 无关。
+
+社区插件 [`Wang-JQ77/dsh-trae-api`](https://github.com/Wang-JQ77/dsh-trae-api)
+的 `src/trae-client.js` 才是真实的 Basic-usage 通道。本节所有条目都用本机真实
+凭据（uid `7540914673709990928`，Pro $20）实测复核过。
+
+### 三个被推翻的假设
+
+| 假设 | 真相 | 怎么发现的 |
+|---|---|---|
+| host = `coresg-normal.trae.ai` | **`a0ai-api-sg.byteintlapi.com`** | 7 host × 端点矩阵：`coresg` 对 Pro 账号恒 `4023`/`4120`，`a0ai` 立刻 200 出字 |
+| body 是 AES-256-GCM 信封 | **裸 JSON，无信封** | `trae-client.js` 里没有信封；实测裸 POST 直接 200 |
+| 要 `GenerateTempToken` 换 JWT | **不需要** | `trae-client.js` 直接用 OAuth `access_token` |
+
+### 真实契约
+
+端点 `POST {agentHost}/api/agent/v3/llm_utils_chat`（host 有备胎
+`https://trae-api-sg.mchost.guru`，同区域另一入口，实测对同一请求回相同
+`session_id`）：
+
+```jsonc
+// 请求头（小写 x-uid / x-app-id 才是 SG 网关认的）
+{
+  "Authorization": "Cloud-IDE-JWT <oauth access_token>",
+  "X-Cloudide-Token": "<同一个 access_token>",
+  "x-uid": "<uid>",
+  "x-app-id": "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8",
+  "x-device-id": "<sha256(machineId) 前 32 hex>",
+  "x-machine-id": "<machineId>",
+  "x-request-id": "<每次随机 UUID>",
+  "x-ide-version": "3.3.67",
+  "x-ide-version-code": "20260401",
+  "x-device-type": "windows",
+  "x-os-version": "Windows 10",
+  "Content-Type": "application/json",
+  "Accept": "text/event-stream"
+}
+// 请求体
+{
+  "messages": [{"role": "user", "content": [{"type": "text", "text": "…"}]}],
+  "model": "<任意字符串>",
+  "function": "inline_chat",
+  "stream": true,
+  "request_id": "<uuid>",
+  "session_id": "<同一个 uuid>"
+}
+```
+
+响应 SSE 事件序列：
+`progress_notice` → `metadata` → `timing_cost`（含 `provider_model_name`）→
+`output`×N（`{response, reasoning_content, tool_calls}`）→
+`token_usage` → `done`（`{finish_reason}`）。
+
+### ⚠️ 大写 `X-App-Id` 会让 `model_list` 回 500
+
+`tmp/bisect-headers.mjs` 逐个头叠加实测（基线 200/9 条）：
+
+| 叠加的头 | 结果 |
+|---|---|
+| `X-Ide-Token` / `X-Uid` / `X-App-Version` / `X-Ide-Version` | 200 |
+| **`X-App-Id`（大写，SOLO 遗留）** | **500** |
+| `X-App-Version-Code` / `X-Ide-Version-Type` | 200 |
+| `X-Device-Type` / `X-Device-Brand` / `Request-Traffic-Type` / `X-Device-Id` | 200 |
+| 全部一起 | 500 |
+
+`X-App-Id` 是 SOLO 后端的头，SG 网关拿到它会走错配置分支。因此
+`traeSOLOHeaders()` 对 `trae_intl` **整段早返回**，只发上表那组头 ——
+而不是「先发 SOLO 头再删几个」，免得以后又长回来。
+
+### ⚠️ `function` 只有一个合法值
+
+18 个候选逐个试，只有 `inline_chat` 通过；其余全部
+`2001 no function config found for appId=…, function=<f>`；
+`chat` / `builder` 回 `4023 the model is unknown`。
+CN 那 15 个 `solo_*` / `*_v3` 是 SOLO 权益专用，Pro 账号一律 2001。
+
+### ⚠️ `model` 字段被服务端完全忽略
+
+18 个别名（含 `zzz-nonexistent-model` 与空串 `model: ""`）全部 200 且
+`provider_model_name` 恒为 **`ep-20250724133548-k5xl9`** —— 字节 Seed 单一模型池。
+附加的 7 种选模参数（`model_id` / `selected_model` / `model_choice` / `model_list`
+/ `target_model` / `llm_config` …）全部无效。自报身份：`glm-5.2` 与
+`DeepSeek-V4-Pro` 都自称 Seed，`zzz-bogus` 自称 Doubao。
+
+模型下拉里那 8-9 条是**标签**，不是不同模型。contextWindow 之类元数据仍照抄
+`model_list` 的声明。
+
+### ✅ 多轮上下文是真的
+
+同一次请求内带多轮 `messages`，模型能引用前文（「记住 7421」→ 答「7421」；
+「记住 9137」→ 下一轮答「9137」）。DSH 每轮重放完整历史的模型是对的。
+
+### 端到端自测
+
+`D:\Work\DSH\tmp\e2e-trae-intl.mjs` —— esbuild 把**真实生产代码**
+（`trae-adapter.ts` / `trae.ts` / `trae-product.ts`）打成一个 ESM shim，
+然后跑 `TraeAdapter.stream()` 完整路径（resolveModel → prepareIntlRequest
+→ send → SSE 解析 → StreamChunk）：
+
+```
+model_list → 200 …/api/ide/v1/model_list
+远端目录 9 条：gemini-2.5-pro-preview-03-25(30000), …, MiniMax-M2.7(112000)
+适配器目录返回 8 个模型：…（glm-5.3 被 isTraeModelCallable 正确滤掉：它带
+  client_connect/custom_model_id/ak，是要自带 key 的 BYOK 项）
+
+=== 真实对话：model=gemini-2.5-pro-preview-03-25 ===
+[chunk] {"type":"block-start","index":0,"blockType":"text"}
+[chunk] {"type":"text-delta","index":0,"text":"2"}
+[chunk] {"type":"usage","usage":{"inputTokens":59,"outputTokens":1}}
+[chunk] {"type":"block-end",…}   {"type":"finish","reason":{"kind":"stop"}}
+text  = "2"      ✅
+```
+
+自测抓出的两个真 bug（esbuild 不做类型检查，`npm test` 也抓不到）：
+
+1. `trae.ts` 用了 `randomUUID()` 但没加进 `import { … } from 'node:crypto'`
+   → 运行期 `ReferenceError`，**聊天完全不可用**。
+2. `traeSOLOHeaders` 给 INTL 发大写 `X-App-Id` → `model_list` 500。
+
+跑法（必须先 `cd` 到仓库根，否则 external 的 `@deepseek-ai/*` 解析不到）：
+
+```powershell
+node D:\Work\DSH\tmp\e2e-trae-intl.mjs                   # 单轮 + 多轮
+$env:DUMP='1'; node D:\Work\DSH\tmp\e2e-trae-intl.mjs   # 打印每个 StreamChunk
+node D:\Work\DSH\tmp\bisect-headers.mjs                  # 头叠加矩阵
+node D:\Work\DSH\tmp\e2e-multiturn.mjs                   # 多轮上下文 + 模型身份
+```
+
+### 余额
+
+a0ai 上 12 个余额/配额候选路径全 404 —— 国际版的额度只能从
+`growsg-normal.trae.ai/trae/api/v1/pay/ide_user_ent_usage` 读（返回
+`billing_version:3`、`is_dollar_usage_billing:true`、`Pro plan`）。
+`trae-credits.ts` 尚未接这个端点，余额显示会走 fallback。

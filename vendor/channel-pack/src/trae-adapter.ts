@@ -19,6 +19,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
+import { randomUUID } from 'node:crypto'
 import { LlmAdapter, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -39,8 +40,6 @@ import {
   readNumberField,
   isTraeModelCallable,
   traeMaxModeFields,
-  fetchTraeChatJwt,
-  sealTraeEnvelope,
   traeSOLOHeaders,
   transformToSOLOBody,
   type TraeCredential,
@@ -55,9 +54,9 @@ import { normalizeHarnessMessages } from './message-shape.js'
 /**
  * 一次已构造好的 chat 请求（body + 头）。
  *
- * 之所以把「构造」与「发送」拆成两步：国际版的 body 里装着**一次性信封**
- * （AES-GCM + `X-Request-Pin`），服务端按 pin 防重放，所以每次重试都必须
- * 重新构造，不能复用同一份序列化字符串。
+ * 之所以把「构造」与「发送」拆成两步：国际版 `inline_chat` 的 body 里带
+ * 每轮随机的 `request_id` / `session_id`，且头里 `x-request-id` 每次重新
+ * 随机 —— 重试（含账号轮换）时不能复用同一份序列化字符串。
  */
 interface TraePreparedRequest {
   body: string
@@ -1073,16 +1072,15 @@ export class TraeAdapter extends LlmAdapter {
 
     // 4. 发送请求（401/403 时刷新一次凭据后重试）
     //
-    // ⚠️ 国际版（`llm_raw_chat`）不能复用序列化好的 body：它的 body 里装着
-    // **一次性信封**（AES-GCM + pin），服务端按 pin 防重放，第二次提交同一个
-    // pin 会返回流内 `4120`。所以这里传的是「按凭据现场构造请求」的函数，
-    // 每次重试（含账号轮换）都重新取 JWT、重新封信封。
+    // 国际版（`inline_chat`）的 body 必须**在每次发送时**现场构造：
+    // `request_id` / `session_id` 是每轮会话标识，且 `x-request-id` 头
+    // 每次随机。所以传「按凭据构造请求」的函数而非序列化好的字符串。
     const intlMessages = this.product.id === 'trae_intl'
       ? (openaiBody.messages as unknown[])
       : undefined
     const prepare = intlMessages !== undefined
       ? (c: TraeCredential): Promise<TraePreparedRequest> =>
-          this.prepareIntlRequest(c, options.model, intlMessages)
+          this.prepareIntlRequest(c, options.model, intlMessages, openaiBody)
       : (c: TraeCredential): Promise<TraePreparedRequest> => Promise.resolve({
           body,
           headers: traeSOLOHeaders(c, this.product, true, this.machineIdGeneration()),
@@ -1230,47 +1228,69 @@ export class TraeAdapter extends LlmAdapter {
     }
   }
 
-  /** 发起一次 chat 请求；网络失败映射为可重试的 TRANSPORT 错误。 */
+  /**
+   * 发起一次 chat 请求；网络失败映射为可重试的 TRANSPORT 错误。
+   *
+   * 主机故障转移：主 `agentHost` 连接层失败（DNS/TCP/超时，非 HTTP 4xx/5xx）
+   * 时按 `agentHostFallbacks` 顺序换机重试一次。国际版实测
+   * `a0ai-api-sg.byteintlapi.com` 与 `trae-api-sg.mchost.guru` 对同一请求
+   * 都回 200 且 `session_id` 一致 —— 同一后端两个入口。
+   */
   private async send(
     credential: TraeCredential,
     prepare: (c: TraeCredential) => Promise<TraePreparedRequest>,
     options: GenerateOptions,
   ): Promise<Response> {
     this.sendCount += 1
-    try {
-      const prepared = await prepare(credential)
-      return await this.fetchImpl(`${this.product.agentHost}${traeChatPathFor(this.product)}`, {
-        method: 'POST',
-        headers: new Headers(prepared.headers),
-        body: prepared.body,
-        signal: options.signal,
-      })
-    } catch (error) {
-      if (options.signal?.aborted) throw error
-      if (isTransportError(error)) {
-        throw new LlmError(`trae: transport error: ${errorMessage(error)}`, 'TRANSPORT', { cause: error as Error })
+    const path = traeChatPathFor(this.product)
+    const hosts = [this.product.agentHost, ...(this.product.agentHostFallbacks ?? [])]
+    let lastError: unknown
+    for (const [index, host] of hosts.entries()) {
+      try {
+        const prepared = await prepare(credential)
+        return await this.fetchImpl(`${host}${path}`, {
+          method: 'POST',
+          headers: new Headers(prepared.headers),
+          body: prepared.body,
+          signal: options.signal,
+        })
+      } catch (error) {
+        if (options.signal?.aborted) throw error
+        if (!isTransportError(error) || index === hosts.length - 1) throw error
+        // 最后一台机器，或不是连接层问题 → 交给下面统一映射。
+        lastError = error
       }
-      throw error
     }
+    throw new LlmError(`trae: transport error: ${errorMessage(lastError)}`, 'TRANSPORT', { cause: lastError as Error })
   }
 
   /**
-   * 构造国际版 `llm_raw_chat` 的请求（CN 不走这里）。
+   * 构造国际版 `inline_chat` 的请求（CN 不走这里）。
    *
-   * 协议逐项还原自 `aiserver/server.js` deob 偏移 11871652 的 `ASe.llmRawChat`：
-   * 1. messages 映射为 `{role, content:[{type:'text', text}]}`（**字符串 content
-   *    必须包成单元素数组**，客户端就是这么做的）；
-   * 2. `sealTraeEnvelope(JSON.stringify(msgs))` 得到 `message` / `requestPin` / `requestAt`；
-   * 3. body = `{model_name, message}`（**只有这两个字段**，没有 stream / temperature）；
-   * 4. 头 = SOLO 头 + `{get-svc: 1, X-Request-Pin, X-Requested-At}`，
-   *    并把 `Authorization` 换成临时 JWT。
+   * 协议（`Wang-JQ77/dsh-trae-api` 的 `trae-client.js` buildChatBody，
+   * 并经本机真实凭据逐项验证 —— 见 `FORK-NOTES.md`「回滚与重写记录」）：
    *
-   * ⚠️ 每次调用都要重新取 JWT 并重新封信封 —— pin 复用会被 `4120` 防重放拒绝。
+   * ```json
+   * {"messages":[{"role":"user","content":[{"type":"text","text":"…"}]}],
+   *  "model":"glm-5.2","function":"inline_chat","stream":true,
+   *  "request_id":"<uuid>","session_id":"<uuid>"}
+   * ```
+   *
+   * 关键点：
+   * - **裸 JSON，没有信封** —— `llm_raw_chat` 的 AES-256-GCM 是 SOLO 后端专属。
+   * - `request_id` 与 `session_id` 用**同一个**随机 UUID。
+   * - `function` 必须是 `inline_chat`；该 appId 下其余 17 个候选全部
+   *   `2001 no function config found for appId=…, function=<f>`。
+   * - 认证 = OAuth `access_token` 同时进 `Authorization: Cloud-IDE-JWT` 和
+   *   `X-Cloudide-Token`（由 {@link traeSOLOHeaders} 处理），**不需要** JWT 交换。
+   * - OpenAI 的 `temperature` / `max_tokens` / `tools` / `reasoning_effort`
+   *   一并透传 —— 实测服务端接受并忽略不影响返回，故保留以便将来上游支持。
    */
   private async prepareIntlRequest(
     credential: TraeCredential,
     modelName: string,
     messages: readonly unknown[],
+    extra: Record<string, unknown>,
   ): Promise<TraePreparedRequest> {
     const wire = messages.map((m) => {
       const message = m as { role?: string; content?: unknown; name?: string }
@@ -1284,15 +1304,21 @@ export class TraeAdapter extends LlmAdapter {
       if (message.name !== undefined && message.role === 'tool') item.name = message.name
       return item
     })
-    const envelope = sealTraeEnvelope(Buffer.from(JSON.stringify(wire)))
+    const sessionId = randomUUID()
     const headers = traeSOLOHeaders(credential, this.product, true, this.machineIdGeneration())
-    // 认证形态：Authorization 必须是临时 JWT，X-Cloudide-Token 保持 OAuth access_token。
-    headers.Authorization = `Cloud-IDE-JWT ${await fetchTraeChatJwt(credential, this.product, this.fetchImpl)}`
-    headers['get-svc'] = '1'
-    headers['X-Request-Pin'] = envelope.requestPin
-    headers['X-Requested-At'] = String(envelope.requestAt)
     return {
-      body: JSON.stringify({ model_name: modelName, message: envelope.message }),
+      body: JSON.stringify({
+        // `extra` 是 OpenAI 形状的 body（含 temperature / max_tokens / tools /
+        // reasoning_effort）。**先展开它**，再用国际版协议要求的字段覆盖 ——
+        // 顺序反了会让 `extra.messages`（DSH 原生形状）盖掉规范化后的 wire。
+        ...extra,
+        messages: wire,
+        model: modelName,
+        function: this.product.function,
+        stream: true,
+        request_id: sessionId,
+        session_id: sessionId,
+      }),
       headers,
     }
   }
