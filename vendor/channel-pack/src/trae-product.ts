@@ -494,7 +494,24 @@ export function traeModelsBodyFor(product: TraeProduct): Record<string, unknown>
  * **不承诺**切换会换底层模型。保留它是因为它确实是上游目录的真值，不是编的。
  */
 const TRAE_INTL_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
+  // v4（2026-10-15）：从渲染进程日志里的 `solo_agent_1__<id>_null` 模式还原，
+  // 共 22 条（10-15 09:35 的 `window4/renderer.log`），顺序对齐用户界面
+  // 「内置」分组：Seed 排第一、GPT-6 全家族 4 条、GPT-5.6/5.5/5.4/5.2 各 1 条。
+  //
+  // ⚠️ **截至此版本**（仍是日志还原、非上游真值）：
+  // - `solo_agent` 18 → 22（v3 漏掉了 `gpt-6-astra` / `gpt-6-sol` /
+  //   `gpt-6.1-sol` / `minimax-m3` —— 与用户截图一一对照）
+  // - `contextWindow` 统一 64_000（RPC 响应体未落盘，保守值不是上游真值）
+  // - 这 22 条**全部**会被服务端的 `model` 字段忽略（见 selection-matrix
+  //   的 44 条实测），但保留真目录是为了与界面一致
+  // - 其他 agentType（`solo_coder` 8 / `solo_agent_lite` 15 / `agent` 12 /
+  //   `solo_work_lite` 4 / `solo_work_remote` 4 / `solo_design_lite` 2 …）
+  //   用户截图里没显示；这些是「按 agentType 分组」的不同选择器，本次
+  //   不引入（怕覆盖 `solo_agent` 的菜单）。
   { id: 'Dola-Seed-2.0-Code', name: 'Seed-2.1-Turbo', contextWindow: 64_000 },
+  { id: 'gpt-6.1-sol', name: 'GPT-6.1-Sol', contextWindow: 64_000 },
+  { id: 'gpt-6-astra', name: 'GPT-6-Astra', contextWindow: 64_000 },
+  { id: 'gpt-6-sol', name: 'GPT-6-Sol', contextWindow: 64_000 },
   { id: 'gpt-6-luna', name: 'GPT-6-Luna', contextWindow: 64_000 },
   { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol', contextWindow: 64_000 },
   { id: 'gpt-5.6-terra', name: 'GPT-5.6-Terra', contextWindow: 64_000 },
@@ -502,15 +519,16 @@ const TRAE_INTL_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
   { id: 'gpt-5.5', name: 'GPT-5.5', contextWindow: 64_000 },
   { id: 'gpt-5.4', name: 'GPT-5.4', contextWindow: 64_000 },
   { id: 'gpt-5.2', name: 'GPT-5.2', contextWindow: 64_000 },
+  { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 64_000 },
+  { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 64_000 },
+  { id: 'deepseek-v4-flash-0731', name: 'DeepSeek-V4-Flash', contextWindow: 64_000 },
+  { id: 'deepseek-v4-pro-0813', name: 'DeepSeek-V4-Pro', contextWindow: 64_000 },
   { id: 'kimi-k3', name: 'Kimi-K3', contextWindow: 64_000 },
   { id: 'kimi-k2.7-code', name: 'Kimi-K2.7-Code', contextWindow: 64_000 },
   { id: 'kimi-k2.5', name: 'Kimi-K2.5', contextWindow: 64_000 },
   { id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview', contextWindow: 64_000 },
   { id: 'gemini-3-flash-solo', name: 'Gemini-3-Flash-Preview', contextWindow: 64_000 },
-  { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 64_000 },
-  { id: 'deepseek-v4-pro-0813', name: 'DeepSeek-V4-Pro', contextWindow: 64_000 },
-  { id: 'deepseek-v4-flash-0731', name: 'DeepSeek-V4-Flash', contextWindow: 64_000 },
-  { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 64_000 },
+  { id: 'minimax-m3', name: 'MiniMax-M3', contextWindow: 64_000 },
   { id: 'minimax-m2.7', name: 'MiniMax-M2.7', contextWindow: 64_000 },
 ]
 
