@@ -909,7 +909,18 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       if (available) await traeIntl.refreshAccountCredential(available.entry.credentialRef, pool, available.entry.id)
       else await traeIntl.refresh()
     },
-    fetchRemoteModels: () => traeIntl.fetchModels(pool),
+    // 模型表是**静态**的，故这里不传 `fetchRemoteModels`（与 gemini 同款约定）。
+    // 国际版的 REST 目录 `POST /api/ide/v1/model_list {"type":"llm_raw_chat"}`
+    // 返回的是 **`llm_raw_chat` 这条老通道**的 9 个模型（Gemini-2.5-Pro / GPT-4o /
+    // DeepSeek-V3 / GLM-5.3 / MiniMax-M2.7 …），与用户在 Trae 界面里看到的
+    // Solo Agent 选择器**不是同一份**——界面那份 18 条（`Dola-Seed-2.0-Code`
+    // 排在最前）走渲染进程 → Rust TransportManager 的 RPC，URL 构造在 Rust
+    // 二进制里，JS bundle 无字符串常量，HTTP 层复现不了（详见
+    // `TRAE_INTL_FALLBACK_MODELS` 的注释）。让远端旧目录盖掉真目录，只会
+    // 让用户选到上游早已不存在的模型。
+    // 代价：`remoteMeta`（`multimodal` / `maxOutputTokens`）拿不到，逐模型
+    // 判定退回保守默认（纯文本 / `fallbackMaxOutputTokens`）；由于国际版选模
+    // 本就不生效，这个代价可接受。
     readImage: makeReadImage(ctx),
     accountPool: pool,
     product: TRAE_INTL,

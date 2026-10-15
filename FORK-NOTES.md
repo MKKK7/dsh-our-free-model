@@ -412,6 +412,10 @@ model_list → 200 …/api/ide/v1/model_list
 text  = "2"      ✅
 ```
 
+> 这份输出是**改目录之前**的（脚本仍带 `fetchRemoteModels`，且那是测试夹具不是
+> 生产装配）。生产路径的目录见下文「模型目录」一节 —— 现在是 18 条，
+> `tmp\e2e-trae-intl-static.mjs` 才是对应的那份自测。
+
 自测抓出的两个真 bug（esbuild 不做类型检查，`npm test` 也抓不到）：
 
 1. `trae.ts` 用了 `randomUUID()` 但没加进 `import { … } from 'node:crypto'`
@@ -433,3 +437,95 @@ a0ai 上 12 个余额/配额候选路径全 404 —— 国际版的额度只能�
 `growsg-normal.trae.ai/trae/api/v1/pay/ide_user_ent_usage` 读（返回
 `billing_version:3`、`is_dollar_usage_billing:true`、`Pro plan`）。
 `trae-credits.ts` 尚未接这个端点，余额显示会走 fallback。
+
+---
+
+## 模型目录：从 9 条老通道换成 18 条真目录（2026-10-15）
+
+用户在 Trae 界面看到「模型更新了一批，Seed 排在第一个」，但插件里下拉出来的
+还是 `Gemini-2.5-Pro / GPT-4o / DeepSeek-V3 / GLM-5.3` 那 9 条。原因有二，
+都查清了。
+
+### 真目录不在 REST 层，在渲染进程的 Rust RPC 里
+
+`POST /api/ide/v1/model_list {"type":"llm_raw_chat"}` 在 a0ai / trae-api-sg /
+coresg 三个 host 上都返回**同一份 9 条**。扫了 24 个 `type` 值，只有
+`llm_raw_chat` 与 `chat` 给 200（同一名单），`builder` 给 2 条 BYOK 项，其余全
+`4001`。把 `chat_v3` / `solo_agent` / `code_reviewer` / `refactor` 等当 `type`
+再打一遍 → 全 400：**它们是 label 名，不是 `model_list` 的 type**。
+
+客户端日志给出了真答案（`%APPDATA%\Trae\logs\<ts>\window1\renderer.log`）：
+
+```
+[TransportManager] executeRequest, model model_list, 7ce385b7-…, cost: 0
+[TransportManager] executeRequest, model model_list_by_function, 1769d8f3-…
+[TransportManager] executeRequest, model get_model_selection_modes, 903d0848-…
+[ai-chat/v2][AiChatV2SelectionFlow][core][model-store] model list refreshed
+  {"labelCount":7,"modelCountByLabel":{"agent":17,"solo_agent":15,"refactor":6,
+   "code_reviewer":5,"code_review_summary":3,"solo_coder":1,"solo_builder":1}}
+"legacyModelKey":"1_-_minimax-m2.7"
+```
+
+RPC 方法名可从 `@byted-icube\ai-modules-chat\dist\index.mjs:5006` 直接读到
+（`SERVER_NAME = "model"`，METHODS 含 `model_list` / `model_list_by_function` /
+`get_model_selection_modes` …）。**但 URL 复现不了**：传输层是 Rust 实现的
+（bundle 里只有 `[ai-chat/v2][rust] invoke cost=… ${service}.${method}` 这行日志，
+没有任何 URL 字符串常量）。在 `bytegate-sg.byteintlapi.com` 上试了 13 条路径 ×
+4 种 body，全部 404。
+
+于是目录只能从日志里的 `model-select` 事件逐条还原 —— `tmp\extract-models3.mjs`
+按行同时抓 `model_name` / `model_display_name` / `modelName` / `displayName` 再
+配对（**两个重叠正则会把匹配互相吃掉**，只抓到 4 条），落盘
+`tmp\trae-intl-model-names.json`，得 18 条：
+
+| id | 显示名 |
+|---|---|
+| `Dola-Seed-2.0-Code` | Seed-2.1-Turbo |
+| `gpt-6-luna` | GPT-6-Luna |
+| `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` | GPT-5.6-Sol / Terra / Luna |
+| `gpt-5.5` / `gpt-5.4` / `gpt-5.2` | GPT-5.5 / 5.4 / 5.2 |
+| `kimi-k3` / `kimi-k2.7-code` / `kimi-k2.5` | Kimi-K3 / K2.7-Code / K2.5 |
+| `gemini-3.1-pro` | Gemini-3.1-Pro-Preview |
+| `gemini-3-flash-solo` | Gemini-3-Flash-Preview |
+| `deepseek-v4.1-flash` | DeepSeek-V4.1-Flash |
+| `deepseek-v4-pro-0813` | DeepSeek-V4-Pro |
+| `deepseek-v4-flash-0731` | DeepSeek-V4-Flash |
+| `glm-5.2` | GLM-5.2 |
+| `minimax-m2.7` | MiniMax-M2.7 |
+
+`Dola-Seed-2.0-Code` 就是用户说的「seed 排第一个」。日志只记名字，RPC 响应体
+没落盘，所以 **`contextWindow` 统一填 64_000**（保守估计值，不是上游真值）。
+
+### 让静态目录真的生效
+
+`index.ts:912` 原来传了 `fetchRemoteModels: () => traeIntl.fetchModels(pool)`，
+会让那 9 条老通道目录**盖掉**静态表。已删掉，改为一段注释 —— 这正是 gemini
+通道「模型表是静态的，故这里不传 `fetchRemoteModels`」的既有约定
+（`index.ts:1365`）。没有为此新增产品开关：`index.ts` 只有这一处调
+`traeIntl.fetchModels`，删掉 option 即让 `ensureRemoteModels` 提前返回，
+`remoteModels` 恒 `undefined`，目录自然落到 `fallbackModels`。
+
+代价：`remoteMeta` 拿不到，逐模型的 `multimodal` / `maxOutputTokens` 判定退回
+保守默认。由于国际版选模根本不生效（见上一节），这个代价可接受。
+
+### 静态装配路径的自测
+
+`tmp\e2e-trae-intl-static.mjs`（**不传** `fetchRemoteModels`，与生产装配一致）：
+
+```
+目录 18 条：
+   Dola-Seed-2.0-Code       Seed-2.1-Turbo
+   gpt-6-luna               GPT-6-Luna
+   …
+   glm-5.2                  GLM-5.2
+   minimax-m2.7             MiniMax-M2.7
+
+=== 真实对话：model=Dola-Seed-2.0-Code ===
+2
+text="2" usage={"inputTokens":59,"outputTokens":1}
+✅ 静态目录 + 真实对话成功
+```
+
+注意打印里 `ctx= ?` 不是 bug：`listModels()` 返回的是归一化模型，`contextWindow`
+挂在 `resolveModel()` 的 `context` 字段里（`trae-adapter.ts:889`）。
+

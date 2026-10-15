@@ -38755,15 +38755,24 @@ function traeModelsBodyFor(product) {
   return product.id === "trae_intl" ? { type: "llm_raw_chat" } : null;
 }
 var TRAE_INTL_FALLBACK_MODELS = [
-  { id: "gemini-2.5-pro-preview-03-25", name: "Gemini-2.5-Pro-Preview(0506)", contextWindow: 3e4 },
-  { id: "gemini_2.5_flash", name: "Gemini-2.5-Flash", contextWindow: 3e4 },
-  { id: "gpt-4.1-2025-04-14", name: "GPT-4.1", contextWindow: 4e4 },
-  { id: "gpt-4o", name: "GPT-4o", contextWindow: 4e4 },
-  { id: "deepseek-V3-0324", name: "DeepSeek-V3-0324", contextWindow: 4e4 },
-  { id: "deepseek-V3", name: "DeepSeek-V3", contextWindow: 4e4 },
-  { id: "deepseek-R1", name: "DeepSeek-Reasoner\uFF08R1\uFF09", contextWindow: 4e4 },
-  { id: "glm-5.3", name: "glm-5.3", contextWindow: 3e4 },
-  { id: "MiniMax-M2.7", name: "MiniMax-M2.7", contextWindow: 112e3 }
+  { id: "Dola-Seed-2.0-Code", name: "Seed-2.1-Turbo", contextWindow: 64e3 },
+  { id: "gpt-6-luna", name: "GPT-6-Luna", contextWindow: 64e3 },
+  { id: "gpt-5.6-sol", name: "GPT-5.6-Sol", contextWindow: 64e3 },
+  { id: "gpt-5.6-terra", name: "GPT-5.6-Terra", contextWindow: 64e3 },
+  { id: "gpt-5.6-luna", name: "GPT-5.6-Luna", contextWindow: 64e3 },
+  { id: "gpt-5.5", name: "GPT-5.5", contextWindow: 64e3 },
+  { id: "gpt-5.4", name: "GPT-5.4", contextWindow: 64e3 },
+  { id: "gpt-5.2", name: "GPT-5.2", contextWindow: 64e3 },
+  { id: "kimi-k3", name: "Kimi-K3", contextWindow: 64e3 },
+  { id: "kimi-k2.7-code", name: "Kimi-K2.7-Code", contextWindow: 64e3 },
+  { id: "kimi-k2.5", name: "Kimi-K2.5", contextWindow: 64e3 },
+  { id: "gemini-3.1-pro", name: "Gemini-3.1-Pro-Preview", contextWindow: 64e3 },
+  { id: "gemini-3-flash-solo", name: "Gemini-3-Flash-Preview", contextWindow: 64e3 },
+  { id: "deepseek-v4.1-flash", name: "DeepSeek-V4.1-Flash", contextWindow: 64e3 },
+  { id: "deepseek-v4-pro-0813", name: "DeepSeek-V4-Pro", contextWindow: 64e3 },
+  { id: "deepseek-v4-flash-0731", name: "DeepSeek-V4-Flash", contextWindow: 64e3 },
+  { id: "glm-5.2", name: "GLM-5.2", contextWindow: 64e3 },
+  { id: "minimax-m2.7", name: "MiniMax-M2.7", contextWindow: 64e3 }
 ];
 var TRAE_INTL_CHANNELS = resolveChannelList(
   process.env.DSH_TRAE_CHANNELS,
@@ -68146,7 +68155,18 @@ function apply(ctx, config = {}) {
       if (available2) await traeIntl.refreshAccountCredential(available2.entry.credentialRef, pool, available2.entry.id);
       else await traeIntl.refresh();
     },
-    fetchRemoteModels: () => traeIntl.fetchModels(pool),
+    // 模型表是**静态**的，故这里不传 `fetchRemoteModels`（与 gemini 同款约定）。
+    // 国际版的 REST 目录 `POST /api/ide/v1/model_list {"type":"llm_raw_chat"}`
+    // 返回的是 **`llm_raw_chat` 这条老通道**的 9 个模型（Gemini-2.5-Pro / GPT-4o /
+    // DeepSeek-V3 / GLM-5.3 / MiniMax-M2.7 …），与用户在 Trae 界面里看到的
+    // Solo Agent 选择器**不是同一份**——界面那份 18 条（`Dola-Seed-2.0-Code`
+    // 排在最前）走渲染进程 → Rust TransportManager 的 RPC，URL 构造在 Rust
+    // 二进制里，JS bundle 无字符串常量，HTTP 层复现不了（详见
+    // `TRAE_INTL_FALLBACK_MODELS` 的注释）。让远端旧目录盖掉真目录，只会
+    // 让用户选到上游早已不存在的模型。
+    // 代价：`remoteMeta`（`multimodal` / `maxOutputTokens`）拿不到，逐模型
+    // 判定退回保守默认（纯文本 / `fallbackMaxOutputTokens`）；由于国际版选模
+    // 本就不生效，这个代价可接受。
     readImage: makeReadImage(ctx),
     accountPool: pool,
     product: TRAE_INTL

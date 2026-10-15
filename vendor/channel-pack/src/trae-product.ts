@@ -440,39 +440,70 @@ export function traeModelsBodyFor(product: TraeProduct): Record<string, unknown>
 }
 
 /**
- * 兜底模型目录（国际版，9 条 —— **上游 `model_list` 的真实返回**，非试探）。
+ * 兜底模型目录（国际版，18 条 —— **上游 Solo Agent 模型选择器的真实条目**，2026-10-15 刷新）。
  *
- * 来源：`POST https://a0ai-api-sg.byteintlapi.com/api/ide/v1/model_list {"type":"llm_raw_chat"}`
- * + `get-svc: 1`，200 响应 `{"model_configs":[…9 条…]}`，全量落盘在
- * `D:\Work\DSH\tmp\mitm\real\a0ai_model_list.json`。
- * 每条含 `name` / `display_name` / `prompt_max_tokens` / `model_type`
- * （`chat_model` | `reasoning_model`）/ `multimodal` / `status` / `is_preset`。
+ * ## 来源与两次修正
  *
- * ⚠️ 更正：本表此前手写的 8 条（Claude-Sonnet-4.6 / DeepSeek-V4-Flash / Kimi-K3 …）
- * **在服务端根本不存在**，全是猜测，已按上游真值替换。
+ * **v1（已作废）** 手写的 8 条（Claude-Sonnet-4.6 / DeepSeek-V4-Flash / Kimi-K3 …）
+ * 在服务端**根本不存在**，纯属猜测。
  *
- * ⚠️⚠️ **重要实测结论 —— `model` 字段被服务端忽略**（2026-10-15）：
- * 用本表全部 9 条 + `qwen-3.7-plus` / `DeepSeek-V4-Pro` / `claude-sonnet-4-6` /
- * `gpt-4o` / `auto` / **假名 `zzz-nonexistent-model`** / **空串** 各发一次，
- * 全部 200、全部路由到同一个上游端点 `ep-20250724133548-k5xl9`，
- * 且自报身份都是 **ByteDance**（Seed 系）。附加 `model_id` / `selected_model` /
+ * **v2（已作废）** `POST https://a0ai-api-sg.byteintlapi.com/api/ide/v1/model_list
+ * {"type":"llm_raw_chat"}` + `get-svc: 1` 的 9 条返回（Gemini-2.5-Pro / GPT-4o /
+ * DeepSeek-V3 / GLM-5.3 / MiniMax-M2.7 …）。这是 **`llm_raw_chat` 通道的老目录**，
+ * 并不是用户在 Trae 界面里看到的那个下拉框。扫了 24 个 `type` 值，
+ * 只有 `llm_raw_chat` / `chat`（同名单）与 `builder`（2 条）返回 200，
+ * 其余全 `400 {"code":4001}`；`chat_v3` / `solo_agent` / `builder_v3` 等
+ * 真实标签值直接当 `type` 发会被拒（400）。
+ *
+ * **v3（本表）** Trae 真正的模型目录走**渲染进程 → Rust TransportManager 的 RPC**
+ * （`{service:"model", method:"model_list"}` / `model_list_by_function` /
+ * `get_model_selection_modes`），URL 构造在 Rust 二进制里，JS bundle 里没有字符串常量，
+ * 也没有任何 HTTP 路径字面量能对应上——**HTTP 层无法直连复现**。
+ * 但客户端把结果落盘在遥测与日志里，本表 18 条即从
+ * `%APPDATA%\Trae\logs\*\window1\renderer.log` 的 `model_select_tooltip_show`
+ * 与 `model-writeback` 事件中逐条还原（脚本 `tmp\extract-models3.mjs`，
+ * 输出 `tmp\trae-intl-model-names.json`），与日志自报的
+ * `modelCountByLabel:{agent:17, solo_agent:15, …}` 规模吻合。
+ * `Dola-Seed-2.0-Code` 的 `modelName` 与显示名 `Seed-2.1-Turbo` 不一致，
+ * 以 `modelName` 作 id、显示名作 name（其余 17 条两者同名同形）。
+ *
+ * `contextWindow` 统一取 64_000：RPC 返回体未落盘，取不到真值，
+ * 这里是**保守估计值**而非上游真值。
+ *
+ * ## ⚠️⚠️ 选模不生效 —— 这是上游行为，不是本适配器的 bug
+ *
+ * 用**本表全部 18 条 + 对照假名 `zzz-bogus-control`** 各发一次真实对话
+ * （脚本 `tmp\probe-real-models.mjs`，结果 `tmp\mitm\real\model-routing-truth.json`）：
+ * 19 次全部 200、全部返回同一个 `provider_model_name` =
+ * **`ep-20250724133548-k5xl9`**（字节 Seed 单一模型池）。
+ * 早前对 v2 那 9 条的同一实验结论一致，附加 `model_id` / `selected_model` /
  * `model_choice` / `model_list` / `target_model` / `llm_config` 等 7 种选模参数
- * 也**全部无效**（同一 `provider_model_name`）。
+ * 也全部无效。`coresg-normal.trae.ai/api/ide/v1/llm_raw_chat` 用新模型名仍是
+ * `4001 param is invalid`，那是 SOLO 网关，body 形状不同，本插件走不通。
  *
- * 结论：Pro 套餐背后是**单一模型池**，`model` 只是标签。本目录的价值是
- * 让用户在 DSH 里按上游认知的名字选择/切换显示项，**不承诺**切换会换底层模型。
- * 保留本表是因为它确实是上游 `model_list` 的真值，不是编的。
+ * 结论：Pro 套餐背后是**单一模型池**，`model` 只是给界面看的标签。
+ * 本目录的价值是让用户在 DSH 里按上游真实名字选择/显示，
+ * **不承诺**切换会换底层模型。保留它是因为它确实是上游目录的真值，不是编的。
  */
 const TRAE_INTL_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
-  { id: 'gemini-2.5-pro-preview-03-25', name: 'Gemini-2.5-Pro-Preview(0506)', contextWindow: 30_000 },
-  { id: 'gemini_2.5_flash', name: 'Gemini-2.5-Flash', contextWindow: 30_000 },
-  { id: 'gpt-4.1-2025-04-14', name: 'GPT-4.1', contextWindow: 40_000 },
-  { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 40_000 },
-  { id: 'deepseek-V3-0324', name: 'DeepSeek-V3-0324', contextWindow: 40_000 },
-  { id: 'deepseek-V3', name: 'DeepSeek-V3', contextWindow: 40_000 },
-  { id: 'deepseek-R1', name: 'DeepSeek-Reasoner（R1）', contextWindow: 40_000 },
-  { id: 'glm-5.3', name: 'glm-5.3', contextWindow: 30_000 },
-  { id: 'MiniMax-M2.7', name: 'MiniMax-M2.7', contextWindow: 112_000 },
+  { id: 'Dola-Seed-2.0-Code', name: 'Seed-2.1-Turbo', contextWindow: 64_000 },
+  { id: 'gpt-6-luna', name: 'GPT-6-Luna', contextWindow: 64_000 },
+  { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol', contextWindow: 64_000 },
+  { id: 'gpt-5.6-terra', name: 'GPT-5.6-Terra', contextWindow: 64_000 },
+  { id: 'gpt-5.6-luna', name: 'GPT-5.6-Luna', contextWindow: 64_000 },
+  { id: 'gpt-5.5', name: 'GPT-5.5', contextWindow: 64_000 },
+  { id: 'gpt-5.4', name: 'GPT-5.4', contextWindow: 64_000 },
+  { id: 'gpt-5.2', name: 'GPT-5.2', contextWindow: 64_000 },
+  { id: 'kimi-k3', name: 'Kimi-K3', contextWindow: 64_000 },
+  { id: 'kimi-k2.7-code', name: 'Kimi-K2.7-Code', contextWindow: 64_000 },
+  { id: 'kimi-k2.5', name: 'Kimi-K2.5', contextWindow: 64_000 },
+  { id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview', contextWindow: 64_000 },
+  { id: 'gemini-3-flash-solo', name: 'Gemini-3-Flash-Preview', contextWindow: 64_000 },
+  { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 64_000 },
+  { id: 'deepseek-v4-pro-0813', name: 'DeepSeek-V4-Pro', contextWindow: 64_000 },
+  { id: 'deepseek-v4-flash-0731', name: 'DeepSeek-V4-Flash', contextWindow: 64_000 },
+  { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 64_000 },
+  { id: 'minimax-m2.7', name: 'MiniMax-M2.7', contextWindow: 64_000 },
 ]
 
 /**
